@@ -16,6 +16,7 @@ inc_dir = include_directories('src')
 # Source files
 sources = files(
   'src/app/main.c',
+  'src/app/icon_loader.c',
   'src/app/settings.c',
   'src/app/views.c',
   'src/ra_api/client.c',

@@ -6,13 +6,75 @@
 #include "apostrophe.h"
 #include "apostrophe_widgets.h"
 
+#include "app/icon_loader.h"
 #include "app/settings.h"
 #include "app/views.h"
 #include "ra_api/images.h"
 #include "ra_api/ra_api.h"
 
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
 
-void MainView() {
+/* Returns the string field, or "-" when it is missing, empty, or not a string.
+   The result points into json and stays valid until json is deleted. */
+static const char *GetStringValue(cJSON *json, const char *key) {
+    const char *value = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, key));
+    return (value && value[0]) ? value : "-";
+}
+
+/* Returns the numeric field, or 0 when it is missing or not a number.
+   cJSON_GetNumberValue yields NaN for those, and casting NaN to int is UB. */
+static int GetIntValue(cJSON *json, const char *key) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
+    return cJSON_IsNumber(item) ? (int)cJSON_GetNumberValue(item) : 0;
+}
+
+/* "12.3 MB (418)", or "empty". */
+static void FormatCacheUsage(char *out, size_t out_size) {
+    unsigned long long bytes = 0;
+    int files = 0;
+
+    if (!RA_GetImageCacheUsage(&bytes, &files)) {
+        snprintf(out, out_size, "unknown");
+    } else if (files == 0) {
+        snprintf(out, out_size, "empty");
+    } else {
+        snprintf(out, out_size, "%.1f MB (%d)", (double)bytes / (1024.0 * 1024.0), files);
+    }
+}
+
+typedef struct {
+    cJSON *achievement;
+    int    id;
+    int    display_order;
+    bool   unlocked;
+} AchievementEntry;
+
+/* qsort() takes no context pointer, and qsort_r's signature is not portable,
+   so the grouping choice is handed to the comparator through a file static. */
+static bool g_sort_unlocked_first;
+
+/* Everything is ordered by DisplayOrder; when g_sort_unlocked_first is set,
+   unlocked achievements are grouped ahead of locked ones first. */
+static int CompareAchievements(const void *a, const void *b) {
+    const AchievementEntry *x = (const AchievementEntry *)a;
+    const AchievementEntry *y = (const AchievementEntry *)b;
+
+    if (g_sort_unlocked_first && x->unlocked != y->unlocked) {
+        return x->unlocked ? -1 : 1;
+    }
+
+    if (x->display_order != y->display_order) {
+        return (x->display_order > y->display_order) - (x->display_order < y->display_order);
+    }
+
+    /* DisplayOrder is not unique, and qsort is not stable; fall back to ID so
+       the order stays the same between runs. */
+    return (x->id > y->id) - (x->id < y->id);
+}
+
+/* ── Views ───────────────────────────────────────────────────────────────── */
+
+void MainView(void) {
     ap_list_item items[] = {
         { .label = "Recently Played Games" },
     };
@@ -76,15 +138,25 @@ void SettingsView(void) {
         { .label = "Off", .value = "Off" },
     };
 
+    char cache_usage[48];
+    FormatCacheUsage(cache_usage, sizeof(cache_usage));
+    ap_option cache_option[] = {
+        { .label = cache_usage, .value = cache_usage },
+    };
+
+    enum { ROW_USERNAME, ROW_API_KEY, ROW_UNLOCKED_FIRST, ROW_CLEAR_CACHE };
+
     ap_options_item items[] = {
-        { .label = "Username", .type = AP_OPT_KEYBOARD,
+        [ROW_USERNAME] = { .label = "Username", .type = AP_OPT_KEYBOARD,
           .options = username_option, .option_count = 1, .selected_option = 0 },
-        { .label = "API Key", .type = AP_OPT_KEYBOARD,
+        [ROW_API_KEY] = { .label = "API Key", .type = AP_OPT_KEYBOARD,
           .options = api_key_option, .option_count = 1, .selected_option = 0 },
-        { .label = "Unlocked First", .type = AP_OPT_STANDARD,
+        [ROW_UNLOCKED_FIRST] = { .label = "Unlocked First", .type = AP_OPT_STANDARD,
           .options = unlocked_first_options,
           .option_count = sizeof(unlocked_first_options) / sizeof(unlocked_first_options[0]),
           .selected_option = settings->unlocked_first ? 0 : 1 },
+        [ROW_CLEAR_CACHE] = { .label = "Clear Image Cache", .type = AP_OPT_CLICKABLE,
+          .options = cache_option, .option_count = 1, .selected_option = 0 },
     };
 
     ap_footer_item footer[] = {
@@ -102,69 +174,40 @@ void SettingsView(void) {
         .confirm_button = AP_BTN_START,
     };
 
-    ap_options_list_result result;
-    ap_options_list(&opts, &result);
+    /* A clickable row exits the options list, so re-enter after handling it. */
+    for (;;) {
+        ap_options_list_result result;
+        ap_options_list(&opts, &result);
 
-    if (result.action == AP_ACTION_CONFIRMED) {
-        Settings updated = *settings;
-        snprintf(updated.username, sizeof(updated.username), "%s", username_option[0].value);
-        snprintf(updated.api_key, sizeof(updated.api_key), "%s", api_key_option[0].value);
-        updated.unlocked_first = (items[2].selected_option == 0);
+        if (result.action == AP_ACTION_SELECTED && result.focused_index == ROW_CLEAR_CACHE) {
+            if (!RA_ClearImageCache()) {
+                ErrorView("Some cached images could not be deleted.");
+            }
+            FormatCacheUsage(cache_usage, sizeof(cache_usage));
 
-        Settings_Set(&updated);
-        if (!Settings_Save()) {
-            ErrorView("Failed to save settings.");
+            opts.initial_selected_index = result.focused_index;
+            opts.visible_start_index    = result.visible_start_index;
+            continue;
         }
+
+        if (result.action == AP_ACTION_CONFIRMED) {
+            Settings updated = *settings;
+            snprintf(updated.username, sizeof(updated.username), "%s", username_option[0].value);
+            snprintf(updated.api_key, sizeof(updated.api_key), "%s", api_key_option[0].value);
+            updated.unlocked_first = (items[ROW_UNLOCKED_FIRST].selected_option == 0);
+
+            Settings_Set(&updated);
+            if (!Settings_Save()) {
+                ErrorView("Failed to save settings.");
+            }
+        }
+        break;
     }
 
     free((void *)username_option[0].label);
     free((void *)username_option[0].value);
     free((void *)api_key_option[0].label);
     free((void *)api_key_option[0].value);
-}
-
-/* Returns the string field, or "-" when it is missing, empty, or not a string.
-   The result points into json and stays valid until json is deleted. */
-static const char *GetStringValue(cJSON *json, const char *key) {
-    const char *value = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, key));
-    return (value && value[0]) ? value : "-";
-}
-
-/* Returns the numeric field, or 0 when it is missing or not a number.
-   cJSON_GetNumberValue yields NaN for those, and casting NaN to int is UB. */
-static int GetIntValue(cJSON *json, const char *key) {
-    cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
-    return cJSON_IsNumber(item) ? (int)cJSON_GetNumberValue(item) : 0;
-}
-
-typedef struct {
-    cJSON *achievement;
-    int    id;
-    int    display_order;
-    bool   unlocked;
-} AchievementEntry;
-
-/* qsort() takes no context pointer, and qsort_r's signature is not portable,
-   so the grouping choice is handed to the comparator through a file static. */
-static bool g_sort_unlocked_first;
-
-/* Everything is ordered by DisplayOrder; when g_sort_unlocked_first is set,
-   unlocked achievements are grouped ahead of locked ones first. */
-static int CompareAchievements(const void *a, const void *b) {
-    const AchievementEntry *x = (const AchievementEntry *)a;
-    const AchievementEntry *y = (const AchievementEntry *)b;
-
-    if (g_sort_unlocked_first && x->unlocked != y->unlocked) {
-        return x->unlocked ? -1 : 1;
-    }
-
-    if (x->display_order != y->display_order) {
-        return (x->display_order > y->display_order) - (x->display_order < y->display_order);
-    }
-
-    /* DisplayOrder is not unique, and qsort is not stable; fall back to ID so
-       the order stays the same between runs. */
-    return (x->id > y->id) - (x->id < y->id);
 }
 
 void AchievementsListView(const char *game_title, cJSON *achievements) {
@@ -177,9 +220,11 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     /* Heap rather than VLAs: a game can carry a few hundred achievements. */
     AchievementEntry *entries = calloc((size_t)count, sizeof(*entries));
     ap_list_item *items = calloc((size_t)count, sizeof(*items));
-    if (!entries || !items) {
+    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
+    if (!entries || !items || !slots) {
         free(entries);
         free(items);
+        free(slots);
         return;
     }
 
@@ -210,17 +255,9 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
            so locked rows need no local image processing. */
         const char *badge = cJSON_GetStringValue(
             cJSON_GetObjectItemCaseSensitive(entry, "BadgeName"));
-
-        SDL_Texture *icon = NULL;
         if (badge && badge[0]) {
-            char badge_path[64];
-            snprintf(badge_path, sizeof(badge_path), "/Badge/%s%s.png",
+            snprintf(slots[i].path, sizeof(slots[i].path), "/Badge/%s%s.png",
                      badge, entries[i].unlocked ? "" : "_lock");
-
-            char local_path[512];
-            if (RA_GetImage(badge_path, local_path, sizeof(local_path))) {
-                icon = ap_load_image(local_path);
-            }
         }
 
         char points[32];
@@ -232,7 +269,6 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
             .label         = GetStringValue(entry, "Title"),
             .metadata      = GetStringValue(entry, "Description"),
             .trailing_text = strdup(points),
-            .image         = icon,
         };
     }
 
@@ -240,20 +276,23 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
         { .button = AP_BTN_B, .label = "Back" },
     };
 
+    IconLoader loader = { .slots = slots, .count = count };
+
     ap_list_opts opts = ap_list_default_opts(game_title, items, count);
     opts.footer       = footer;
     opts.footer_count = sizeof(footer) / sizeof(footer[0]);
-    opts.show_images  = true;
+    IconLoader_Attach(&opts, &loader);
 
     ap_list_result result;
     ap_list(&opts, &result);
 
     for (i = 0; i < count; i++) {
         free((char *)items[i].trailing_text);
-        if (items[i].image) SDL_DestroyTexture(items[i].image);
     }
+    IconLoader_DestroyTextures(items, count);
     free(items);
     free(entries);
+    free(slots);
 }
 
 void GameDetailView(int game_id) {
@@ -368,6 +407,8 @@ void RecentGamesView(void) {
     }
 
     ap_list_item items[n_games];
+    IconSlot slots[n_games];
+    memset(slots, 0, sizeof(slots));
 
     cJSON *game;
     int i = 0;
@@ -385,27 +426,25 @@ void RecentGamesView(void) {
         char id_metadata[RA_GAME_ID_LENGTH];
         snprintf(id_metadata, RA_GAME_ID_LENGTH, "%d", (int)cJSON_GetNumberValue(id));
 
-        /* ap_list owns neither the strings nor the texture, so both are freed
-           after it returns. A missing icon just leaves .image NULL. */
-        char icon_path[512];
-        SDL_Texture *icon = NULL;
-        if (RA_GetImage(
-                cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(game, "ImageIcon")),
-                icon_path, sizeof(icon_path))) {
-            icon = ap_load_image(icon_path);
+        /* The icon is fetched lazily by IconLoader once the list is up. */
+        const char *icon = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(game, "ImageIcon"));
+        if (icon && icon[0]) {
+            snprintf(slots[i].path, sizeof(slots[i].path), "%s", icon);
         }
 
         /* These buffers die with this iteration, so hand the list copies. */
         items[i] = (ap_list_item){
             .label = strdup(item_label),
             .metadata = strdup(id_metadata),
-            .image = icon,
         };
         i++;
     }
 
+    IconLoader loader = { .slots = slots, .count = n_games };
+
     ap_list_opts opts = ap_list_default_opts("Recently Played Games", items, n_games);
-    opts.show_images = true;
+    IconLoader_Attach(&opts, &loader);
 
     /* Stay on the list until the user backs out with B */
     for (;;) {
