@@ -22,11 +22,65 @@ static const char *GetStringValue(cJSON *json, const char *key) {
     return (value && value[0]) ? value : "-";
 }
 
+/* Like GetStringValue, but reports a missing field as NULL rather than "-",
+   for optional values the caller needs to distinguish. */
+static const char *GetStringOrNull(cJSON *json, const char *key) {
+    const char *value = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, key));
+    return (value && value[0]) ? value : NULL;
+}
+
 /* Returns the numeric field, or 0 when it is missing or not a number.
    cJSON_GetNumberValue yields NaN for those, and casting NaN to int is UB. */
 static int GetIntValue(cJSON *json, const char *key) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
     return cJSON_IsNumber(item) ? (int)cJSON_GetNumberValue(item) : 0;
+}
+
+/* ── Achievement mapping ─────────────────────────────────────────────────────
+   The two endpoints that return achievements disagree on field names and on
+   which fields exist at all, so each gets its own mapper and the detail view
+   sees only the common shape. */
+
+/* An entry of the "Achievements" object from GetGameInfoAndUserProgress. */
+static Achievement AchievementFromGameProgress(cJSON *entry) {
+    return (Achievement){
+        .title                = GetStringOrNull(entry, "Title"),
+        .description          = GetStringOrNull(entry, "Description"),
+        .badge_name           = GetStringOrNull(entry, "BadgeName"),
+        .author               = GetStringOrNull(entry, "Author"),
+        .type                 = GetStringOrNull(entry, "Type"),
+        .game_title           = NULL, /* the whole list is one game */
+        .date_earned          = GetStringOrNull(entry, "DateEarned"),
+        /* DateEarnedHardcore is sent only on a hardcore unlock. */
+        .hardcore             = GetStringOrNull(entry, "DateEarnedHardcore") != NULL,
+        .points               = GetIntValue(entry, "Points"),
+        .true_ratio           = GetIntValue(entry, "TrueRatio"),
+        .num_awarded          = GetIntValue(entry, "NumAwarded"),
+        .num_awarded_hardcore = GetIntValue(entry, "NumAwardedHardcore"),
+    };
+}
+
+/* An element of the GetUserRecentAchievements array. */
+static Achievement AchievementFromRecent(cJSON *entry) {
+    /* One "Date" plus a HardcoreMode flag here, rather than two date fields. */
+    cJSON *hardcore = cJSON_GetObjectItemCaseSensitive(entry, "HardcoreMode");
+
+    return (Achievement){
+        .title                = GetStringOrNull(entry, "Title"),
+        .description          = GetStringOrNull(entry, "Description"),
+        .badge_name           = GetStringOrNull(entry, "BadgeName"),
+        .author               = GetStringOrNull(entry, "Author"),
+        .type                 = GetStringOrNull(entry, "Type"),
+        .game_title           = GetStringOrNull(entry, "GameTitle"),
+        .date_earned          = GetStringOrNull(entry, "Date"),
+        .hardcore             = cJSON_IsTrue(hardcore) ||
+                                (cJSON_IsNumber(hardcore) && cJSON_GetNumberValue(hardcore) != 0),
+        .points               = GetIntValue(entry, "Points"),
+        .true_ratio           = GetIntValue(entry, "TrueRatio"),
+        /* This endpoint carries no award counts. */
+        .num_awarded          = -1,
+        .num_awarded_hardcore = -1,
+    };
 }
 
 /* "win_condition" -> "Win Condition".
@@ -99,8 +153,11 @@ static int CompareAchievements(const void *a, const void *b) {
 /* ── Views ───────────────────────────────────────────────────────────────── */
 
 void MainView(void) {
+    enum { MENU_RECENT_GAMES, MENU_RECENT_ACHIEVEMENTS };
+
     ap_list_item items[] = {
-        { .label = "Recently Played Games" },
+        [MENU_RECENT_GAMES]        = { .label = "Recently Played Games" },
+        [MENU_RECENT_ACHIEVEMENTS] = { .label = "Recent Achievements" },
     };
 
     ap_footer_item footer[] = {
@@ -109,9 +166,10 @@ void MainView(void) {
         { .button = AP_BTN_A, .label = "Select", .is_confirm = true },
     };
 
-    ap_list_opts opts = ap_list_default_opts("RA Explorer", items, 1);
+    ap_list_opts opts = ap_list_default_opts("RA Explorer", items,
+                                             sizeof(items) / sizeof(items[0]));
     opts.footer       = footer;
-    opts.footer_count = 3;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
     opts.secondary_action_button = AP_BTN_X;
 
     /* Stay on the menu until the user backs out with B */
@@ -125,8 +183,12 @@ void MainView(void) {
 
         if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
             SettingsView();
-        } else if (result.action == AP_ACTION_SELECTED && result.selected_index == 0) {
-            RecentGamesView();
+        } else if (result.action == AP_ACTION_SELECTED) {
+            if (result.selected_index == MENU_RECENT_GAMES) {
+                RecentGamesView();
+            } else if (result.selected_index == MENU_RECENT_ACHIEVEMENTS) {
+                RecentAchievementsView();
+            }
         }
     }
 }
@@ -319,7 +381,9 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
         opts.visible_start_index = result.visible_start_index;
 
         /* entries and items stay index-aligned: reordering is not enabled. */
-        AchievementDetailView(entries[result.selected_index].achievement);
+        Achievement selected =
+            AchievementFromGameProgress(entries[result.selected_index].achievement);
+        AchievementDetailView(&selected);
     }
 
     for (i = 0; i < count; i++) {
@@ -331,55 +395,146 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     free(slots);
 }
 
-void AchievementDetailView(cJSON *achievement) {
+/* How far back "recent" reaches. The endpoint's own default is 60 minutes,
+   which is too narrow to be useful as a browsable list. */
+#define RECENT_ACHIEVEMENTS_MINUTES (30 * 24 * 60)
+
+void RecentAchievementsView(void) {
+    if (!Settings_IsConfigured()) {
+        ErrorView("Set your username and API key in Settings first.");
+        return;
+    }
+
+    cJSON *json = RA_GetUserRecentAchievements(Settings_Get()->username,
+                                               RECENT_ACHIEVEMENTS_MINUTES);
+    if (!json) {
+        ErrorView("Failed to get recent achievements from RetroAchievements.");
+        return;
+    }
+
+    /* An empty array is a valid answer here, unlike a failed request. */
+    int count = cJSON_GetArraySize(json);
+    if (count <= 0) {
+        cJSON_Delete(json);
+        ErrorView("No achievements unlocked in the past week.");
+        return;
+    }
+
+    cJSON **sources = calloc((size_t)count, sizeof(*sources));
+    ap_list_item *items = calloc((size_t)count, sizeof(*items));
+    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
+    if (!sources || !items || !slots) {
+        free(sources);
+        free(items);
+        free(slots);
+        cJSON_Delete(json);
+        return;
+    }
+
+    /* The API already returns most recent first, so the response order stands
+       — there is no cross-game DisplayOrder to sort on. */
+    cJSON *entry;
+    int i = 0;
+    cJSON_ArrayForEach(entry, json) {
+        sources[i] = entry;
+
+        /* Recent achievements are unlocked by definition, so always the colour
+           badge. BadgeURL is already a full path; BadgeName is the fallback. */
+        const char *badge_url = GetStringOrNull(entry, "BadgeURL");
+        const char *badge_name = GetStringOrNull(entry, "BadgeName");
+        if (badge_url) {
+            snprintf(slots[i].path, sizeof(slots[i].path), "%s", badge_url);
+        } else if (badge_name) {
+            snprintf(slots[i].path, sizeof(slots[i].path), "/Badge/%s.png", badge_name);
+        }
+
+        /* Labels point into json, which outlives the list. */
+        items[i] = (ap_list_item){
+            .label         = GetStringValue(entry, "Title"),
+            .trailing_text = GetStringValue(entry, "GameTitle"),
+        };
+        i++;
+    }
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
+    };
+
+    IconLoader loader = { .slots = slots, .count = count };
+
+    ap_list_opts opts = ap_list_default_opts("Recent Achievements", items, count);
+    opts.footer       = footer;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    IconLoader_Attach(&opts, &loader);
+
+    for (;;) {
+        ap_list_result result;
+        if (ap_list(&opts, &result) != AP_OK) break;
+        if (result.selected_index < 0 || result.selected_index >= count) break;
+
+        opts.initial_index       = result.selected_index;
+        opts.visible_start_index = result.visible_start_index;
+
+        Achievement selected = AchievementFromRecent(sources[result.selected_index]);
+        AchievementDetailView(&selected);
+    }
+
+    IconLoader_DestroyTextures(items, count);
+    free(sources);
+    free(items);
+    free(slots);
+    cJSON_Delete(json);
+}
+
+void AchievementDetailView(const Achievement *achievement) {
     /* Always the colour badge here, even when locked — the grayscale "_lock"
        variant is only used to signal state in the list. */
     char badge_image[512];
     bool has_image = false;
-    const char *badge = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(achievement, "BadgeName"));
-    if (badge && badge[0]) {
+    if (achievement->badge_name && achievement->badge_name[0]) {
         char badge_path[ICON_PATH_MAX];
-        snprintf(badge_path, sizeof(badge_path), "/Badge/%s.png", badge);
+        snprintf(badge_path, sizeof(badge_path), "/Badge/%s.png", achievement->badge_name);
         has_image = RA_GetImage(badge_path, badge_image, sizeof(badge_image));
     }
 
-    const char *date_earned = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(achievement, "DateEarned"));
-    bool unlocked = date_earned != NULL && date_earned[0] != '\0';
-
-    /* DateEarnedHardcore is only present on a hardcore unlock, so its presence
-       is what distinguishes the two modes. */
-    const char *date_earned_hardcore = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(achievement, "DateEarnedHardcore"));
-    bool hardcore = date_earned_hardcore != NULL && date_earned_hardcore[0] != '\0';
-
     char points[32];
     snprintf(points, sizeof(points), "%d (%d RetroPoints)",
-        GetIntValue(achievement, "Points"), GetIntValue(achievement, "TrueRatio"));
-
-    char won_by[64];
-    snprintf(won_by, sizeof(won_by), "%d (%d hardcore)",
-        GetIntValue(achievement, "NumAwarded"), GetIntValue(achievement, "NumAwardedHardcore"));
+        achievement->points, achievement->true_ratio);
 
     char unlocked_at[64];
-    if (unlocked) {
+    if (achievement->date_earned) {
         snprintf(unlocked_at, sizeof(unlocked_at), "%s (%s)",
-            date_earned, hardcore ? "Hardcore" : "Softcore");
+            achievement->date_earned, achievement->hardcore ? "Hardcore" : "Softcore");
     } else {
         snprintf(unlocked_at, sizeof(unlocked_at), "Locked");
     }
 
     char type[48];
-    FormatSnakeCase(GetStringValue(achievement, "Type"), type, sizeof(type));
+    FormatSnakeCase(achievement->type ? achievement->type : "-", type, sizeof(type));
 
-    ap_detail_info_pair info_pairs[] = {
-        { "Unlocked", unlocked_at },
-        { "Points",   points },
-        { "Type",     type },
-        { "Author",   GetStringValue(achievement, "Author") },
-        { "Won By",   won_by },
-    };
+    char won_by[64];
+    snprintf(won_by, sizeof(won_by), "%d (%d hardcore)",
+        achievement->num_awarded, achievement->num_awarded_hardcore);
+
+    /* Built row by row, since not every source fills in every field. */
+    ap_detail_info_pair info_pairs[6];
+    int info_count = 0;
+
+    info_pairs[info_count++] = (ap_detail_info_pair){ "Unlocked", unlocked_at };
+
+    if (achievement->game_title) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Game", achievement->game_title };
+    }
+
+    info_pairs[info_count++] = (ap_detail_info_pair){ "Points", points };
+    info_pairs[info_count++] = (ap_detail_info_pair){ "Type", type };
+    info_pairs[info_count++] = (ap_detail_info_pair){
+        "Author", achievement->author ? achievement->author : "-" };
+
+    if (achievement->num_awarded >= 0) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Won By", won_by };
+    }
 
     ap_detail_section sections[3];
     int section_count = 0;
@@ -398,18 +553,18 @@ void AchievementDetailView(cJSON *achievement) {
     }
     sections[section_count++] = (ap_detail_section){
         .type = AP_SECTION_DESCRIPTION, .title = "Description",
-        .description = GetStringValue(achievement, "Description") };
+        .description = achievement->description ? achievement->description : "-" };
     sections[section_count++] = (ap_detail_section){
         .type = AP_SECTION_INFO, .title = "Details",
         .info_pairs = info_pairs,
-        .info_count = sizeof(info_pairs) / sizeof(info_pairs[0]) };
+        .info_count = info_count };
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
     };
 
     ap_detail_opts opts = {
-        .title = GetStringValue(achievement, "Title"),
+        .title = achievement->title ? achievement->title : "-",
         .sections = sections,
         .section_count = section_count,
         .footer = footer,

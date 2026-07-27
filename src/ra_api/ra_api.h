@@ -5,6 +5,7 @@
 
 #include "cjson/cJSON.h"
 
+cJSON *RA_GetUserRecentAchievements(const char *user, int minutes);
 cJSON *RA_GetUserRecentlyPlayedGames(const char *user);
 cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id);
 
