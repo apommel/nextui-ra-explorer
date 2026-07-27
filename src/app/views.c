@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,29 @@ static const char *GetStringValue(cJSON *json, const char *key) {
 static int GetIntValue(cJSON *json, const char *key) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
     return cJSON_IsNumber(item) ? (int)cJSON_GetNumberValue(item) : 0;
+}
+
+/* "win_condition" -> "Win Condition".
+
+   RA's achievement Type is snake_case, and the set of values is open-ended, so
+   this transforms generically instead of mapping the ones we know about — an
+   unrecognised value still renders sensibly rather than falling back to raw. */
+static void FormatSnakeCase(const char *value, char *out, size_t out_size) {
+    size_t i = 0;
+    bool word_start = true;
+
+    for (const char *p = value; *p && i + 1 < out_size; p++) {
+        if (*p == '_') {
+            out[i++] = ' ';
+            word_start = true;
+            continue;
+        }
+
+        out[i++] = word_start ? (char)toupper((unsigned char)*p) : *p;
+        word_start = false;
+    }
+
+    out[i] = '\0';
 }
 
 /* "12.3 MB (418)", or "empty". */
@@ -274,6 +298,7 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
     };
 
     IconLoader loader = { .slots = slots, .count = count };
@@ -283,8 +308,19 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     opts.footer_count = sizeof(footer) / sizeof(footer[0]);
     IconLoader_Attach(&opts, &loader);
 
-    ap_list_result result;
-    ap_list(&opts, &result);
+    /* Stay on the list until the user backs out with B; A opens one
+       achievement and returns here. */
+    for (;;) {
+        ap_list_result result;
+        if (ap_list(&opts, &result) != AP_OK) break;
+        if (result.selected_index < 0 || result.selected_index >= count) break;
+
+        opts.initial_index       = result.selected_index;
+        opts.visible_start_index = result.visible_start_index;
+
+        /* entries and items stay index-aligned: reordering is not enabled. */
+        AchievementDetailView(entries[result.selected_index].achievement);
+    }
 
     for (i = 0; i < count; i++) {
         free((char *)items[i].trailing_text);
@@ -293,6 +329,96 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     free(items);
     free(entries);
     free(slots);
+}
+
+void AchievementDetailView(cJSON *achievement) {
+    /* Always the colour badge here, even when locked — the grayscale "_lock"
+       variant is only used to signal state in the list. */
+    char badge_image[512];
+    bool has_image = false;
+    const char *badge = cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(achievement, "BadgeName"));
+    if (badge && badge[0]) {
+        char badge_path[ICON_PATH_MAX];
+        snprintf(badge_path, sizeof(badge_path), "/Badge/%s.png", badge);
+        has_image = RA_GetImage(badge_path, badge_image, sizeof(badge_image));
+    }
+
+    const char *date_earned = cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(achievement, "DateEarned"));
+    bool unlocked = date_earned != NULL && date_earned[0] != '\0';
+
+    /* DateEarnedHardcore is only present on a hardcore unlock, so its presence
+       is what distinguishes the two modes. */
+    const char *date_earned_hardcore = cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(achievement, "DateEarnedHardcore"));
+    bool hardcore = date_earned_hardcore != NULL && date_earned_hardcore[0] != '\0';
+
+    char points[32];
+    snprintf(points, sizeof(points), "%d (%d RetroPoints)",
+        GetIntValue(achievement, "Points"), GetIntValue(achievement, "TrueRatio"));
+
+    char won_by[64];
+    snprintf(won_by, sizeof(won_by), "%d (%d hardcore)",
+        GetIntValue(achievement, "NumAwarded"), GetIntValue(achievement, "NumAwardedHardcore"));
+
+    char unlocked_at[64];
+    if (unlocked) {
+        snprintf(unlocked_at, sizeof(unlocked_at), "%s (%s)",
+            date_earned, hardcore ? "Hardcore" : "Softcore");
+    } else {
+        snprintf(unlocked_at, sizeof(unlocked_at), "Locked");
+    }
+
+    char type[48];
+    FormatSnakeCase(GetStringValue(achievement, "Type"), type, sizeof(type));
+
+    ap_detail_info_pair info_pairs[] = {
+        { "Unlocked", unlocked_at },
+        { "Points",   points },
+        { "Type",     type },
+        { "Author",   GetStringValue(achievement, "Author") },
+        { "Won By",   won_by },
+    };
+
+    ap_detail_section sections[3];
+    int section_count = 0;
+
+    if (has_image) {
+        /* The section stretches the texture to image_w x image_h with no aspect
+           correction, and the default 300x200 turns a square badge into a wide
+           rectangle. Badges are 64x64, so an equal, integer multiple keeps them
+           square and avoids resampling artefacts. (ap_scale rather than AP_S:
+           the macro reaches into a global only visible to the implementation
+           unit.) */
+        int badge_size = ap_scale(128);
+        sections[section_count++] = (ap_detail_section){
+            .type = AP_SECTION_IMAGE, .image_path = badge_image,
+            .image_w = badge_size, .image_h = badge_size };
+    }
+    sections[section_count++] = (ap_detail_section){
+        .type = AP_SECTION_DESCRIPTION, .title = "Description",
+        .description = GetStringValue(achievement, "Description") };
+    sections[section_count++] = (ap_detail_section){
+        .type = AP_SECTION_INFO, .title = "Details",
+        .info_pairs = info_pairs,
+        .info_count = sizeof(info_pairs) / sizeof(info_pairs[0]) };
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+    };
+
+    ap_detail_opts opts = {
+        .title = GetStringValue(achievement, "Title"),
+        .sections = sections,
+        .section_count = section_count,
+        .footer = footer,
+        .footer_count = sizeof(footer) / sizeof(footer[0]),
+        .show_section_separator = true,
+    };
+
+    ap_detail_result result;
+    ap_detail_screen(&opts, &result);
 }
 
 void GameDetailView(int game_id) {
@@ -443,7 +569,14 @@ void RecentGamesView(void) {
 
     IconLoader loader = { .slots = slots, .count = n_games };
 
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
+    };
+
     ap_list_opts opts = ap_list_default_opts("Recently Played Games", items, n_games);
+    opts.footer       = footer;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
     IconLoader_Attach(&opts, &loader);
 
     /* Stay on the list until the user backs out with B */

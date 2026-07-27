@@ -25,4 +25,8 @@ void GameDetailView(int game_id);
    and must outlive the call. */
 void AchievementsListView(const char *game_title, cJSON *achievements);
 
+/* One achievement's details. achievement is a single entry from that
+   "Achievements" object; it is borrowed and must outlive the call. */
+void AchievementDetailView(cJSON *achievement);
+
 #endif /* VIEWS_H */
