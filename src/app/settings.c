@@ -9,7 +9,8 @@
 
 #define SETTINGS_FILENAME "settings.json"
 
-static Settings g_settings;
+/* Defaults for a first run, before any settings.json exists. */
+static Settings g_settings = { .unlocked_first = true };
 
 static bool Settings_Path(char *out_path, size_t out_size) {
     char dir[400];
@@ -25,9 +26,8 @@ const Settings *Settings_Get(void) {
     return &g_settings;
 }
 
-void Settings_Set(const char *username, const char *api_key) {
-    snprintf(g_settings.username, sizeof(g_settings.username), "%s", username ? username : "");
-    snprintf(g_settings.api_key, sizeof(g_settings.api_key), "%s", api_key ? api_key : "");
+void Settings_Set(const Settings *settings) {
+    if (settings) g_settings = *settings;
 }
 
 bool Settings_IsConfigured(void) {
@@ -71,9 +71,19 @@ bool Settings_Load(void) {
         return false;
     }
 
-    Settings_Set(
-        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "username")),
-        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "api_key")));
+    Settings loaded = g_settings; /* keep defaults for anything absent */
+
+    const char *username = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "username"));
+    const char *api_key = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "api_key"));
+    snprintf(loaded.username, sizeof(loaded.username), "%s", username ? username : "");
+    snprintf(loaded.api_key, sizeof(loaded.api_key), "%s", api_key ? api_key : "");
+
+    cJSON *unlocked_first = cJSON_GetObjectItemCaseSensitive(json, "unlocked_first");
+    if (cJSON_IsBool(unlocked_first)) {
+        loaded.unlocked_first = cJSON_IsTrue(unlocked_first);
+    }
+
+    Settings_Set(&loaded);
     cJSON_Delete(json);
 
     return Settings_IsConfigured();
@@ -96,6 +106,7 @@ bool Settings_Save(void) {
     }
     cJSON_AddStringToObject(json, "username", g_settings.username);
     cJSON_AddStringToObject(json, "api_key", g_settings.api_key);
+    cJSON_AddBoolToObject(json, "unlocked_first", g_settings.unlocked_first);
 
     char *text = cJSON_Print(json);
     cJSON_Delete(json);

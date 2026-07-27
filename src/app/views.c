@@ -69,11 +69,22 @@ void SettingsView(void) {
         { .label = strdup(settings->api_key), .value = strdup(settings->api_key) },
     };
 
+    /* Standard options are only ever indexed, never freed by the widget, so
+       unlike the keyboard rows these can be literals. */
+    ap_option unlocked_first_options[] = {
+        { .label = "On",  .value = "On"  },
+        { .label = "Off", .value = "Off" },
+    };
+
     ap_options_item items[] = {
         { .label = "Username", .type = AP_OPT_KEYBOARD,
           .options = username_option, .option_count = 1, .selected_option = 0 },
         { .label = "API Key", .type = AP_OPT_KEYBOARD,
           .options = api_key_option, .option_count = 1, .selected_option = 0 },
+        { .label = "Unlocked First", .type = AP_OPT_STANDARD,
+          .options = unlocked_first_options,
+          .option_count = sizeof(unlocked_first_options) / sizeof(unlocked_first_options[0]),
+          .selected_option = settings->unlocked_first ? 0 : 1 },
     };
 
     ap_footer_item footer[] = {
@@ -95,7 +106,12 @@ void SettingsView(void) {
     ap_options_list(&opts, &result);
 
     if (result.action == AP_ACTION_CONFIRMED) {
-        Settings_Set(username_option[0].value, api_key_option[0].value);
+        Settings updated = *settings;
+        snprintf(updated.username, sizeof(updated.username), "%s", username_option[0].value);
+        snprintf(updated.api_key, sizeof(updated.api_key), "%s", api_key_option[0].value);
+        updated.unlocked_first = (items[2].selected_option == 0);
+
+        Settings_Set(&updated);
         if (!Settings_Save()) {
             ErrorView("Failed to save settings.");
         }
@@ -119,6 +135,125 @@ static const char *GetStringValue(cJSON *json, const char *key) {
 static int GetIntValue(cJSON *json, const char *key) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
     return cJSON_IsNumber(item) ? (int)cJSON_GetNumberValue(item) : 0;
+}
+
+typedef struct {
+    cJSON *achievement;
+    int    id;
+    int    display_order;
+    bool   unlocked;
+} AchievementEntry;
+
+/* qsort() takes no context pointer, and qsort_r's signature is not portable,
+   so the grouping choice is handed to the comparator through a file static. */
+static bool g_sort_unlocked_first;
+
+/* Everything is ordered by DisplayOrder; when g_sort_unlocked_first is set,
+   unlocked achievements are grouped ahead of locked ones first. */
+static int CompareAchievements(const void *a, const void *b) {
+    const AchievementEntry *x = (const AchievementEntry *)a;
+    const AchievementEntry *y = (const AchievementEntry *)b;
+
+    if (g_sort_unlocked_first && x->unlocked != y->unlocked) {
+        return x->unlocked ? -1 : 1;
+    }
+
+    if (x->display_order != y->display_order) {
+        return (x->display_order > y->display_order) - (x->display_order < y->display_order);
+    }
+
+    /* DisplayOrder is not unique, and qsort is not stable; fall back to ID so
+       the order stays the same between runs. */
+    return (x->id > y->id) - (x->id < y->id);
+}
+
+void AchievementsListView(const char *game_title, cJSON *achievements) {
+    int count = cJSON_GetArraySize(achievements);
+    if (count <= 0) {
+        ErrorView("This game has no achievements.");
+        return;
+    }
+
+    /* Heap rather than VLAs: a game can carry a few hundred achievements. */
+    AchievementEntry *entries = calloc((size_t)count, sizeof(*entries));
+    ap_list_item *items = calloc((size_t)count, sizeof(*items));
+    if (!entries || !items) {
+        free(entries);
+        free(items);
+        return;
+    }
+
+    /* "Achievements" is an object keyed by achievement id, not an array. */
+    cJSON *achievement;
+    int i = 0;
+    cJSON_ArrayForEach(achievement, achievements) {
+        const char *date_earned = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(achievement, "DateEarned"));
+
+        entries[i++] = (AchievementEntry){
+            .achievement   = achievement,
+            .id            = GetIntValue(achievement, "ID"),
+            .display_order = GetIntValue(achievement, "DisplayOrder"),
+            /* Locked achievements omit DateEarned; treat "" as locked too, in
+               case the API ever returns an empty string instead. */
+            .unlocked      = date_earned != NULL && date_earned[0] != '\0',
+        };
+    }
+
+    g_sort_unlocked_first = Settings_Get()->unlocked_first;
+    qsort(entries, (size_t)count, sizeof(*entries), CompareAchievements);
+
+    for (i = 0; i < count; i++) {
+        cJSON *entry = entries[i].achievement;
+
+        /* RA publishes a grayscale variant of every badge at "<name>_lock.png",
+           so locked rows need no local image processing. */
+        const char *badge = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(entry, "BadgeName"));
+
+        SDL_Texture *icon = NULL;
+        if (badge && badge[0]) {
+            char badge_path[64];
+            snprintf(badge_path, sizeof(badge_path), "/Badge/%s%s.png",
+                     badge, entries[i].unlocked ? "" : "_lock");
+
+            char local_path[512];
+            if (RA_GetImage(badge_path, local_path, sizeof(local_path))) {
+                icon = ap_load_image(local_path);
+            }
+        }
+
+        char points[32];
+        snprintf(points, sizeof(points), "%d pts", GetIntValue(entry, "Points"));
+
+        /* label and metadata point into the caller's JSON and must not be
+           freed; only trailing_text and the texture are owned here. */
+        items[i] = (ap_list_item){
+            .label         = GetStringValue(entry, "Title"),
+            .metadata      = GetStringValue(entry, "Description"),
+            .trailing_text = strdup(points),
+            .image         = icon,
+        };
+    }
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+    };
+
+    ap_list_opts opts = ap_list_default_opts(game_title, items, count);
+    opts.footer       = footer;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    opts.show_images  = true;
+
+    ap_list_result result;
+    ap_list(&opts, &result);
+
+    for (i = 0; i < count; i++) {
+        free((char *)items[i].trailing_text);
+        if (items[i].image) SDL_DestroyTexture(items[i].image);
+    }
+    free(items);
+    free(entries);
 }
 
 void GameDetailView(int game_id) {
@@ -192,6 +327,7 @@ void GameDetailView(int game_id) {
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_A, .label = "Achievements", .is_confirm = true },
     };
 
     ap_detail_opts opts = {
@@ -203,8 +339,15 @@ void GameDetailView(int game_id) {
         .show_section_separator = true,
     };
 
-    ap_detail_result result;
-    ap_detail_screen(&opts, &result);
+    /* A opens the achievements list and returns here; B leaves the screen. */
+    for (;;) {
+        ap_detail_result result;
+        ap_detail_screen(&opts, &result);
+        if (result.action != AP_DETAIL_ACTION) break;
+
+        AchievementsListView(cJSON_GetStringValue(title),
+                             cJSON_GetObjectItemCaseSensitive(json, "Achievements"));
+    }
 
     cJSON_Delete(json);
 }
