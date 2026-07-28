@@ -43,6 +43,7 @@ typedef struct {
     const char *author;
     const char *type;         /* NULL for an ordinary achievement */
     const char *game_title;   /* NULL when the source is already one game */
+    int         game_id;      /* 0 when the game screen is already behind us */
     const char *date_earned;  /* NULL when still locked */
     bool        hardcore;
     int         points;

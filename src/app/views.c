@@ -50,6 +50,9 @@ static Achievement AchievementFromGameProgress(cJSON *entry) {
         .author               = GetStringOrNull(entry, "Author"),
         .type                 = GetStringOrNull(entry, "Type"),
         .game_title           = NULL, /* the whole list is one game */
+        /* No jump back to the game: it is already one B press away, and
+           offering it here would let the two screens push each other forever. */
+        .game_id              = 0,
         .date_earned          = GetStringOrNull(entry, "DateEarned"),
         /* DateEarnedHardcore is sent only on a hardcore unlock. */
         .hardcore             = GetStringOrNull(entry, "DateEarnedHardcore") != NULL,
@@ -72,6 +75,8 @@ static Achievement AchievementFromRecent(cJSON *entry) {
         .author               = GetStringOrNull(entry, "Author"),
         .type                 = GetStringOrNull(entry, "Type"),
         .game_title           = GetStringOrNull(entry, "GameTitle"),
+        /* Reached from a cross-game list, so the game screen is worth offering. */
+        .game_id              = GetIntValue(entry, "GameID"),
         .date_earned          = GetStringOrNull(entry, "Date"),
         .hardcore             = cJSON_IsTrue(hardcore) ||
                                 (cJSON_IsNumber(hardcore) && cJSON_GetNumberValue(hardcore) != 0),
@@ -83,17 +88,18 @@ static Achievement AchievementFromRecent(cJSON *entry) {
     };
 }
 
-/* "win_condition" -> "Win Condition".
+/* "win_condition" -> "Win Condition", "beaten-hardcore" -> "Beaten Hardcore".
 
-   RA's achievement Type is snake_case, and the set of values is open-ended, so
-   this transforms generically instead of mapping the ones we know about — an
-   unrecognised value still renders sensibly rather than falling back to raw. */
+   RA's machine-readable labels are snake_case for achievement Type but
+   hyphenated for award kinds, so both separators are treated alike. The value
+   sets are open-ended, so this transforms generically instead of mapping the
+   ones we know about — an unrecognised value still renders sensibly. */
 static void FormatSnakeCase(const char *value, char *out, size_t out_size) {
     size_t i = 0;
     bool word_start = true;
 
     for (const char *p = value; *p && i + 1 < out_size; p++) {
-        if (*p == '_') {
+        if (*p == '_' || *p == '-') {
             out[i++] = ' ';
             word_start = true;
             continue;
@@ -150,14 +156,34 @@ static int CompareAchievements(const void *a, const void *b) {
     return (x->id > y->id) - (x->id < y->id);
 }
 
+/* ── Navigation ──────────────────────────────────────────────────────────────
+*/
+
+/* Opens a game's achievements directly, skipping its detail screen. The list
+   needs the per-game response, which only the game endpoint provides. */
+static void OpenGameAchievements(int game_id) {
+    cJSON *json = RA_GetGameInfoAndUserProgress(Settings_Get()->username, game_id);
+
+    cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
+    if (!cJSON_IsString(title)) {
+        cJSON_Delete(json);
+        InfoView("Failed to get game details from RetroAchievements.");
+        return;
+    }
+
+    AchievementsListView(cJSON_GetStringValue(title),
+                         cJSON_GetObjectItemCaseSensitive(json, "Achievements"));
+    cJSON_Delete(json);
+}
+
 /* ── Views ───────────────────────────────────────────────────────────────── */
 
 void MainView(void) {
-    enum { MENU_RECENT_GAMES, MENU_RECENT_ACHIEVEMENTS };
+    enum { MENU_RECENT_ACHIEVEMENTS, MENU_RECENT_GAMES  };
 
     ap_list_item items[] = {
-        [MENU_RECENT_GAMES]        = { .label = "Recently Played Games" },
         [MENU_RECENT_ACHIEVEMENTS] = { .label = "Recent Achievements" },
+        [MENU_RECENT_GAMES]        = { .label = "Recently Played Games" },
     };
 
     ap_footer_item footer[] = {
@@ -184,10 +210,11 @@ void MainView(void) {
         if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
             SettingsView();
         } else if (result.action == AP_ACTION_SELECTED) {
-            if (result.selected_index == MENU_RECENT_GAMES) {
-                RecentGamesView();
-            } else if (result.selected_index == MENU_RECENT_ACHIEVEMENTS) {
+            if (result.selected_index == MENU_RECENT_ACHIEVEMENTS) {
                 RecentAchievementsView();
+            }
+            else if (result.selected_index == MENU_RECENT_GAMES) {
+                RecentGamesView();
             }
         }
     }
@@ -559,21 +586,33 @@ void AchievementDetailView(const Achievement *achievement) {
         .info_pairs = info_pairs,
         .info_count = info_count };
 
-    ap_footer_item footer[] = {
-        { .button = AP_BTN_B, .label = "Back" },
-    };
+    /* The jump to the game is offered only when the achievement came from a
+       cross-game list; otherwise that screen is already behind us. */
+    ap_footer_item footer[2];
+    int footer_count = 0;
+    footer[footer_count++] = (ap_footer_item){ .button = AP_BTN_B, .label = "Back" };
+    if (achievement->game_id > 0) {
+        footer[footer_count++] = (ap_footer_item){ .button = AP_BTN_Y, .label = "Game" };
+    }
 
     ap_detail_opts opts = {
         .title = achievement->title ? achievement->title : "-",
         .sections = sections,
         .section_count = section_count,
         .footer = footer,
-        .footer_count = sizeof(footer) / sizeof(footer[0]),
+        .footer_count = footer_count,
         .show_section_separator = true,
     };
 
-    ap_detail_result result;
-    ap_detail_screen(&opts, &result);
+    for (;;) {
+        ap_detail_result result;
+        ap_detail_screen(&opts, &result);
+
+        if (result.action != AP_DETAIL_SECONDARY_ACTION || achievement->game_id <= 0) {
+            break;
+        }
+        GameDetailView(achievement->game_id);
+    }
 }
 
 void GameDetailView(int game_id) {
@@ -671,7 +710,7 @@ void GameDetailView(int game_id) {
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
-        { .button = AP_BTN_A, .label = "Achievements", .is_confirm = true },
+        { .button = AP_BTN_Y, .label = "Achievements" },
     };
 
     ap_detail_opts opts = {
@@ -683,11 +722,12 @@ void GameDetailView(int game_id) {
         .show_section_separator = true,
     };
 
-    /* A opens the achievements list and returns here; B leaves the screen. */
+    /* Y opens the achievements list and returns here; B leaves the screen.
+       A is deliberately unbound — there is nothing here to select. */
     for (;;) {
         ap_detail_result result;
         ap_detail_screen(&opts, &result);
-        if (result.action != AP_DETAIL_ACTION) break;
+        if (result.action != AP_DETAIL_SECONDARY_ACTION) break;
 
         AchievementsListView(cJSON_GetStringValue(title),
                              cJSON_GetObjectItemCaseSensitive(json, "Achievements"));
@@ -750,12 +790,14 @@ void RecentGamesView(void) {
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_Y, .label = "Achievements" },
         { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
     };
 
     ap_list_opts opts = ap_list_default_opts("Recently Played Games", items, n_games);
     opts.footer       = footer;
     opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    opts.secondary_action_button = AP_BTN_Y;
     IconLoader_Attach(&opts, &loader);
 
     /* Stay on the list until the user backs out with B */
@@ -768,7 +810,13 @@ void RecentGamesView(void) {
         opts.visible_start_index = result.visible_start_index;
 
         /* Read from result.items, since the list may have reordered them. */
-        GameDetailView(atoi(result.items[result.selected_index].metadata));
+        int game_id = atoi(result.items[result.selected_index].metadata);
+
+        if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
+            OpenGameAchievements(game_id);
+        } else if (result.action == AP_ACTION_SELECTED) {
+            GameDetailView(game_id);
+        }
     }
 
     for (int j = 0; j < n_games; j++) {

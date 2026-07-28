@@ -33,7 +33,9 @@ cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id) {
     RA_Param params[] = {
         { "u", user },
         { "g", game_id_str },
+        { "a", "1" },
     };
-    cJSON *json = RA_GetRequest("GetGameInfoAndUserProgress", params, 2);
+    cJSON *json = RA_GetRequest("GetGameInfoAndUserProgress", params,
+                                sizeof(params) / sizeof(params[0]));
     return json;
 }
