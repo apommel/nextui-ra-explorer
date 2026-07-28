@@ -21,4 +21,12 @@ typedef struct {
    NULL on failure. */
 cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_count);
 
+/* Performs a GET against retroachievements.org/internal-api/<path>.
+
+   This is the website's own endpoint, not the documented public API: it takes
+   no API key, and it carries no compatibility promise — the shape or the path
+   may change without notice. Only use it where the public API has no
+   equivalent, and let callers degrade gracefully when it returns NULL. */
+cJSON *RA_GetInternalRequest(const char *path, const RA_Param *params, size_t param_count);
+
 #endif /* RA_API_INTERNAL_H */

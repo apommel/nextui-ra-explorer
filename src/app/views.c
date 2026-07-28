@@ -159,9 +159,147 @@ static int CompareAchievements(const void *a, const void *b) {
 /* ── Navigation ──────────────────────────────────────────────────────────────
 */
 
+/* Guards views that hit the public API, which needs credentials. Search is the
+   exception — it goes through the website endpoint and takes no key — so a game
+   reached from search results has to be checked here rather than at the list. */
+static bool RequireSettings(void) {
+    if (Settings_IsConfigured()) return true;
+    InfoView("Set your username and API key in Settings first.");
+    return false;
+}
+
+/* One row of a game list. All strings are borrowed and must outlive the call. */
+typedef struct {
+    int         game_id;
+    const char *title;
+    const char *icon_path;  /* remote RA path or URL; NULL for no icon */
+} GameListRow;
+
+static void OpenGameAchievements(int game_id);
+
+/* The recently-played and search screens differ only in how they obtain their
+   rows, so the list itself — icons, bindings, cleanup — lives here once. */
+static void GameListView(const char *screen_title, const GameListRow *rows, int count) {
+    ap_list_item *items = calloc((size_t)count, sizeof(*items));
+    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
+    if (!items || !slots) {
+        free(items);
+        free(slots);
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        if (rows[i].icon_path) {
+            snprintf(slots[i].path, sizeof(slots[i].path), "%s", rows[i].icon_path);
+        }
+        items[i] = (ap_list_item){ .label = rows[i].title };
+    }
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_Y, .label = "Achievements" },
+        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
+    };
+
+    IconLoader loader = { .slots = slots, .count = count };
+
+    ap_list_opts opts = ap_list_default_opts(screen_title, items, count);
+    opts.footer       = footer;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    opts.secondary_action_button = AP_BTN_Y;
+    IconLoader_Attach(&opts, &loader);
+
+    /* A opens the game, Y skips straight to its achievements. */
+    for (;;) {
+        ap_list_result result;
+        if (ap_list(&opts, &result) != AP_OK) break;
+        if (result.selected_index < 0 || result.selected_index >= count) break;
+
+        opts.initial_index       = result.selected_index;
+        opts.visible_start_index = result.visible_start_index;
+
+        int game_id = rows[result.selected_index].game_id;
+        if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
+            OpenGameAchievements(game_id);
+        } else if (result.action == AP_ACTION_SELECTED) {
+            GameDetailView(game_id);
+        }
+    }
+
+    IconLoader_DestroyTextures(items, count);
+    free(items);
+    free(slots);
+}
+
+/* One row of an achievement list. The Achievement is carried by value so the
+   detail screen needs nothing else; strings inside it are still borrowed. */
+typedef struct {
+    Achievement achievement;
+    char        icon_path[ICON_PATH_MAX];
+} AchievementListRow;
+
+/* Shared by the per-game and cross-game achievement lists, which differ only
+   in how they build and order their rows. */
+static void AchievementListView(const char *screen_title,
+                                const AchievementListRow *rows, int count) {
+    ap_list_item *items = calloc((size_t)count, sizeof(*items));
+    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
+    char (*points)[16] = calloc((size_t)count, sizeof(*points));
+    if (!items || !slots || !points) {
+        free(items);
+        free(slots);
+        free(points);
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const Achievement *a = &rows[i].achievement;
+
+        snprintf(points[i], sizeof(points[i]), "%d pts", a->points);
+        snprintf(slots[i].path, sizeof(slots[i].path), "%s", rows[i].icon_path);
+
+        items[i] = (ap_list_item){
+            .label         = a->title ? a->title : "-",
+            .metadata      = a->description,
+            .trailing_text = points[i],
+        };
+    }
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
+    };
+
+    IconLoader loader = { .slots = slots, .count = count };
+
+    ap_list_opts opts = ap_list_default_opts(screen_title, items, count);
+    opts.footer       = footer;
+    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    IconLoader_Attach(&opts, &loader);
+
+    /* A opens one achievement and returns here; B leaves the list. */
+    for (;;) {
+        ap_list_result result;
+        if (ap_list(&opts, &result) != AP_OK) break;
+        if (result.selected_index < 0 || result.selected_index >= count) break;
+
+        opts.initial_index       = result.selected_index;
+        opts.visible_start_index = result.visible_start_index;
+
+        AchievementDetailView(&rows[result.selected_index].achievement);
+    }
+
+    IconLoader_DestroyTextures(items, count);
+    free(items);
+    free(slots);
+    free(points);
+}
+
 /* Opens a game's achievements directly, skipping its detail screen. The list
    needs the per-game response, which only the game endpoint provides. */
 static void OpenGameAchievements(int game_id) {
+    if (!RequireSettings()) return;
+
     cJSON *json = RA_GetGameInfoAndUserProgress(Settings_Get()->username, game_id);
 
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
@@ -179,11 +317,12 @@ static void OpenGameAchievements(int game_id) {
 /* ── Views ───────────────────────────────────────────────────────────────── */
 
 void MainView(void) {
-    enum { MENU_RECENT_ACHIEVEMENTS, MENU_RECENT_GAMES  };
+    enum { MENU_RECENT_ACHIEVEMENTS, MENU_RECENT_GAMES, MENU_SEARCH_GAMES };
 
     ap_list_item items[] = {
         [MENU_RECENT_ACHIEVEMENTS] = { .label = "Recent Achievements" },
         [MENU_RECENT_GAMES]        = { .label = "Recently Played Games" },
+        [MENU_SEARCH_GAMES]        = { .label = "Search Games" },
     };
 
     ap_footer_item footer[] = {
@@ -215,6 +354,9 @@ void MainView(void) {
             }
             else if (result.selected_index == MENU_RECENT_GAMES) {
                 RecentGamesView();
+            }
+            else if (result.selected_index == MENU_SEARCH_GAMES) {
+                SearchGamesView();
             }
         }
     }
@@ -332,12 +474,10 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
 
     /* Heap rather than VLAs: a game can carry a few hundred achievements. */
     AchievementEntry *entries = calloc((size_t)count, sizeof(*entries));
-    ap_list_item *items = calloc((size_t)count, sizeof(*items));
-    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
-    if (!entries || !items || !slots) {
+    AchievementListRow *rows = calloc((size_t)count, sizeof(*rows));
+    if (!entries || !rows) {
         free(entries);
-        free(items);
-        free(slots);
+        free(rows);
         return;
     }
 
@@ -362,75 +502,76 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     qsort(entries, (size_t)count, sizeof(*entries), CompareAchievements);
 
     for (i = 0; i < count; i++) {
-        cJSON *entry = entries[i].achievement;
+        rows[i].achievement = AchievementFromGameProgress(entries[i].achievement);
 
         /* RA publishes a grayscale variant of every badge at "<name>_lock.png",
            so locked rows need no local image processing. */
-        const char *badge = cJSON_GetStringValue(
-            cJSON_GetObjectItemCaseSensitive(entry, "BadgeName"));
-        if (badge && badge[0]) {
-            snprintf(slots[i].path, sizeof(slots[i].path), "/Badge/%s%s.png",
-                     badge, entries[i].unlocked ? "" : "_lock");
+        if (rows[i].achievement.badge_name) {
+            snprintf(rows[i].icon_path, sizeof(rows[i].icon_path), "/Badge/%s%s.png",
+                     rows[i].achievement.badge_name, entries[i].unlocked ? "" : "_lock");
         }
-
-        char points[32];
-        snprintf(points, sizeof(points), "%d pts", GetIntValue(entry, "Points"));
-
-        /* label and metadata point into the caller's JSON and must not be
-           freed; only trailing_text and the texture are owned here. */
-        items[i] = (ap_list_item){
-            .label         = GetStringValue(entry, "Title"),
-            .metadata      = GetStringValue(entry, "Description"),
-            .trailing_text = strdup(points),
-        };
     }
 
-    ap_footer_item footer[] = {
-        { .button = AP_BTN_B, .label = "Back" },
-        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
-    };
+    AchievementListView(game_title, rows, count);
 
-    IconLoader loader = { .slots = slots, .count = count };
-
-    ap_list_opts opts = ap_list_default_opts(game_title, items, count);
-    opts.footer       = footer;
-    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
-    IconLoader_Attach(&opts, &loader);
-
-    /* Stay on the list until the user backs out with B; A opens one
-       achievement and returns here. */
-    for (;;) {
-        ap_list_result result;
-        if (ap_list(&opts, &result) != AP_OK) break;
-        if (result.selected_index < 0 || result.selected_index >= count) break;
-
-        opts.initial_index       = result.selected_index;
-        opts.visible_start_index = result.visible_start_index;
-
-        /* entries and items stay index-aligned: reordering is not enabled. */
-        Achievement selected =
-            AchievementFromGameProgress(entries[result.selected_index].achievement);
-        AchievementDetailView(&selected);
-    }
-
-    for (i = 0; i < count; i++) {
-        free((char *)items[i].trailing_text);
-    }
-    IconLoader_DestroyTextures(items, count);
-    free(items);
+    free(rows);
     free(entries);
-    free(slots);
 }
 
 /* How far back "recent" reaches. The endpoint's own default is 60 minutes,
    which is too narrow to be useful as a browsable list. */
 #define RECENT_ACHIEVEMENTS_MINUTES (30 * 24 * 60)
 
-void RecentAchievementsView(void) {
-    if (!Settings_IsConfigured()) {
-        InfoView("Set your username and API key in Settings first.");
+void SearchGamesView(void) {
+    ap_keyboard_result query;
+    /* NULL keeps the built-in key help, which documents Y to cancel — B is
+       backspace here, not back. */
+    if (ap_keyboard("", NULL, AP_KB_GENERAL, &query) != AP_OK) {
         return;
     }
+    if (!query.text[0]) {
+        return;
+    }
+
+    cJSON *games = RA_SearchGames(query.text, RA_GAME_LIST_MAX);
+    if (!games) {
+        InfoView("Search failed. RetroAchievements may be unreachable.");
+        return;
+    }
+
+    int count = cJSON_GetArraySize(games);
+    if (count <= 0) {
+        cJSON_Delete(games);
+        InfoView("No games matched that title.");
+        return;
+    }
+
+    GameListRow *rows = calloc((size_t)count, sizeof(*rows));
+    if (!rows) {
+        cJSON_Delete(games);
+        return;
+    }
+
+    cJSON *game;
+    int i = 0;
+    cJSON_ArrayForEach(game, games) {
+        rows[i++] = (GameListRow){
+            .game_id   = GetIntValue(game, "id"),
+            .title     = GetStringValue(game, "title"),
+            /* badgeUrl is absolute here, unlike the public API's bare paths;
+               RA_GetImage takes either. */
+            .icon_path = GetStringOrNull(game, "badgeUrl"),
+        };
+    }
+
+    GameListView("Search Results", rows, count);
+
+    free(rows);
+    cJSON_Delete(games);
+}
+
+void RecentAchievementsView(void) {
+    if (!RequireSettings()) return;
 
     cJSON *json = RA_GetUserRecentAchievements(Settings_Get()->username,
                                                RECENT_ACHIEVEMENTS_MINUTES);
@@ -443,17 +584,12 @@ void RecentAchievementsView(void) {
     int count = cJSON_GetArraySize(json);
     if (count <= 0) {
         cJSON_Delete(json);
-        InfoView("No achievements unlocked in the past week.");
+        InfoView("No achievements unlocked recently.");
         return;
     }
 
-    cJSON **sources = calloc((size_t)count, sizeof(*sources));
-    ap_list_item *items = calloc((size_t)count, sizeof(*items));
-    IconSlot *slots = calloc((size_t)count, sizeof(*slots));
-    if (!sources || !items || !slots) {
-        free(sources);
-        free(items);
-        free(slots);
+    AchievementListRow *rows = calloc((size_t)count, sizeof(*rows));
+    if (!rows) {
         cJSON_Delete(json);
         return;
     }
@@ -463,54 +599,23 @@ void RecentAchievementsView(void) {
     cJSON *entry;
     int i = 0;
     cJSON_ArrayForEach(entry, json) {
-        sources[i] = entry;
+        rows[i].achievement = AchievementFromRecent(entry);
 
-        /* Recent achievements are unlocked by definition, so always the colour
-           badge. BadgeURL is already a full path; BadgeName is the fallback. */
+        /* Unlocked by definition, so always the colour badge. BadgeURL is
+           already a full path; BadgeName is the fallback. */
         const char *badge_url = GetStringOrNull(entry, "BadgeURL");
-        const char *badge_name = GetStringOrNull(entry, "BadgeName");
         if (badge_url) {
-            snprintf(slots[i].path, sizeof(slots[i].path), "%s", badge_url);
-        } else if (badge_name) {
-            snprintf(slots[i].path, sizeof(slots[i].path), "/Badge/%s.png", badge_name);
+            snprintf(rows[i].icon_path, sizeof(rows[i].icon_path), "%s", badge_url);
+        } else if (rows[i].achievement.badge_name) {
+            snprintf(rows[i].icon_path, sizeof(rows[i].icon_path), "/Badge/%s.png",
+                     rows[i].achievement.badge_name);
         }
-
-        /* Labels point into json, which outlives the list. */
-        items[i] = (ap_list_item){
-            .label         = GetStringValue(entry, "Title"),
-            .trailing_text = GetStringValue(entry, "GameTitle"),
-        };
         i++;
     }
 
-    ap_footer_item footer[] = {
-        { .button = AP_BTN_B, .label = "Back" },
-        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
-    };
+    AchievementListView("Recent Achievements", rows, count);
 
-    IconLoader loader = { .slots = slots, .count = count };
-
-    ap_list_opts opts = ap_list_default_opts("Recent Achievements", items, count);
-    opts.footer       = footer;
-    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
-    IconLoader_Attach(&opts, &loader);
-
-    for (;;) {
-        ap_list_result result;
-        if (ap_list(&opts, &result) != AP_OK) break;
-        if (result.selected_index < 0 || result.selected_index >= count) break;
-
-        opts.initial_index       = result.selected_index;
-        opts.visible_start_index = result.visible_start_index;
-
-        Achievement selected = AchievementFromRecent(sources[result.selected_index]);
-        AchievementDetailView(&selected);
-    }
-
-    IconLoader_DestroyTextures(items, count);
-    free(sources);
-    free(items);
-    free(slots);
+    free(rows);
     cJSON_Delete(json);
 }
 
@@ -608,6 +713,10 @@ void AchievementDetailView(const Achievement *achievement) {
         ap_detail_result result;
         ap_detail_screen(&opts, &result);
 
+        /* A is unbound on detail screens: the widget still reports it, so
+           reopen rather than treating it as a way out. */
+        if (result.action == AP_DETAIL_ACTION) continue;
+
         if (result.action != AP_DETAIL_SECONDARY_ACTION || achievement->game_id <= 0) {
             break;
         }
@@ -616,6 +725,8 @@ void AchievementDetailView(const Achievement *achievement) {
 }
 
 void GameDetailView(int game_id) {
+    if (!RequireSettings()) return;
+
     cJSON *json = RA_GetGameInfoAndUserProgress(Settings_Get()->username, game_id);
 
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
@@ -727,6 +838,9 @@ void GameDetailView(int game_id) {
     for (;;) {
         ap_detail_result result;
         ap_detail_screen(&opts, &result);
+
+        /* The widget still reports A, so reopen rather than exiting on it. */
+        if (result.action == AP_DETAIL_ACTION) continue;
         if (result.action != AP_DETAIL_SECONDARY_ACTION) break;
 
         AchievementsListView(cJSON_GetStringValue(title),
@@ -737,92 +851,35 @@ void GameDetailView(int game_id) {
 }
 
 void RecentGamesView(void) {
-    if (!Settings_IsConfigured()) {
-        InfoView("Set your username and API key in Settings first.");
-        return;
-    }
+    if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, 50);
+    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, RA_GAME_LIST_MAX);
 
-    int n_games = cJSON_GetArraySize(json);
-    if (n_games <= 0) {
+    int count = cJSON_GetArraySize(json);
+    if (count <= 0) {
         cJSON_Delete(json);
         InfoView("Failed to get list of games from RetroAchievements.");
         return;
     }
 
-    ap_list_item items[n_games];
-    IconSlot slots[n_games];
-    memset(slots, 0, sizeof(slots));
+    GameListRow *rows = calloc((size_t)count, sizeof(*rows));
+    if (!rows) {
+        cJSON_Delete(json);
+        return;
+    }
 
     cJSON *game;
     int i = 0;
     cJSON_ArrayForEach(game, json) {
-        cJSON *title = cJSON_GetObjectItemCaseSensitive(game, "Title");
-        cJSON *console = cJSON_GetObjectItemCaseSensitive(game, "ConsoleName");
-        cJSON *id = cJSON_GetObjectItemCaseSensitive(game, "GameID");
-        
-        char item_label[128];
-        snprintf(item_label, 128, "%s (%s)", 
-            cJSON_GetStringValue(title),
-            cJSON_GetStringValue(console)
-        );
-
-        char id_metadata[RA_GAME_ID_LENGTH];
-        snprintf(id_metadata, RA_GAME_ID_LENGTH, "%d", (int)cJSON_GetNumberValue(id));
-
-        /* The icon is fetched lazily by IconLoader once the list is up. */
-        const char *icon = cJSON_GetStringValue(
-            cJSON_GetObjectItemCaseSensitive(game, "ImageIcon"));
-        if (icon && icon[0]) {
-            snprintf(slots[i].path, sizeof(slots[i].path), "%s", icon);
-        }
-
-        /* These buffers die with this iteration, so hand the list copies. */
-        items[i] = (ap_list_item){
-            .label = strdup(item_label),
-            .metadata = strdup(id_metadata),
+        rows[i++] = (GameListRow){
+            .game_id   = GetIntValue(game, "GameID"),
+            .title     = GetStringValue(game, "Title"),
+            .icon_path = GetStringOrNull(game, "ImageIcon"),
         };
-        i++;
     }
 
-    IconLoader loader = { .slots = slots, .count = n_games };
+    GameListView("Recently Played Games", rows, count);
 
-    ap_footer_item footer[] = {
-        { .button = AP_BTN_B, .label = "Back" },
-        { .button = AP_BTN_Y, .label = "Achievements" },
-        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
-    };
-
-    ap_list_opts opts = ap_list_default_opts("Recently Played Games", items, n_games);
-    opts.footer       = footer;
-    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
-    opts.secondary_action_button = AP_BTN_Y;
-    IconLoader_Attach(&opts, &loader);
-
-    /* Stay on the list until the user backs out with B */
-    for (;;) {
-        ap_list_result result;
-        if (ap_list(&opts, &result) != AP_OK || result.selected_index < 0) break;
-
-        /* Come back with the cursor and scroll position the user left. */
-        opts.initial_index       = result.selected_index;
-        opts.visible_start_index = result.visible_start_index;
-
-        /* Read from result.items, since the list may have reordered them. */
-        int game_id = atoi(result.items[result.selected_index].metadata);
-
-        if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
-            OpenGameAchievements(game_id);
-        } else if (result.action == AP_ACTION_SELECTED) {
-            GameDetailView(game_id);
-        }
-    }
-
-    for (int j = 0; j < n_games; j++) {
-        free((char *)items[j].label);
-        free((char *)items[j].metadata);
-        if (items[j].image) SDL_DestroyTexture(items[j].image);
-    }
+    free(rows);
     cJSON_Delete(json);
 }

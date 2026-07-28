@@ -96,8 +96,15 @@ bool RA_GetImage(const char *ra_image_path, char *out_path, size_t out_size) {
         return false;
     }
 
+    /* Most endpoints give a path like "/Images/067895.png", but some give the
+       absolute URL; take those as-is rather than prefixing the media host. */
     char url[768];
-    if (snprintf(url, sizeof(url), "%s%s", RA_MEDIA_BASE_URL, ra_image_path) >= (int)sizeof(url)) {
+    bool absolute = strncmp(ra_image_path, "http://", 7) == 0 ||
+                    strncmp(ra_image_path, "https://", 8) == 0;
+    int written = absolute
+        ? snprintf(url, sizeof(url), "%s", ra_image_path)
+        : snprintf(url, sizeof(url), "%s%s", RA_MEDIA_BASE_URL, ra_image_path);
+    if (written >= (int)sizeof(url)) {
         return false;
     }
 

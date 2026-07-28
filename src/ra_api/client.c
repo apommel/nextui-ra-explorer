@@ -1,4 +1,5 @@
 #define RA_API_BASE_URL "https://retroachievements.org/API/API_"
+#define RA_INTERNAL_BASE_URL "https://retroachievements.org/internal-api/"
 #define RA_API_URL_MAX 1024
 
 #include <stdbool.h>
@@ -55,37 +56,12 @@ static bool CURL_AppendParam(char *url, size_t url_size, size_t *url_len, CURL *
     return ok;
 }
 
-cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_count) {
-    const Settings *settings = Settings_Get();
-    if (!settings->api_key[0]) {
-        return NULL; /* not configured yet */
-    }
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        return NULL;
-    }
-
-    /* curl_easy_escape needs the handle, so the URL is built after init. */
-    char *api_key = curl_easy_escape(curl, settings->api_key, 0);
-    if (!api_key) {
-        curl_easy_cleanup(curl);
-        return NULL;
-    }
-
-    char url[RA_API_URL_MAX];
-    int written = snprintf(url, sizeof(url), "%s%s.php?y=%s",
-                           RA_API_BASE_URL, endpoint, api_key);
-    curl_free(api_key);
-
-    if (written < 0 || (size_t)written >= sizeof(url)) {
-        curl_easy_cleanup(curl);
-        return NULL;
-    }
-
-    size_t url_len = (size_t)written;
+/* Appends params to a URL that already carries its "?", fetches it and parses
+   the body as JSON. Takes ownership of the handle. */
+static cJSON *CURL_GetJson(CURL *curl, char *url, size_t url_size, size_t url_len,
+                           const RA_Param *params, size_t param_count) {
     for (size_t i = 0; i < param_count; i++) {
-        if (!CURL_AppendParam(url, sizeof(url), &url_len, curl, &params[i])) {
+        if (!CURL_AppendParam(url, url_size, &url_len, curl, &params[i])) {
             curl_easy_cleanup(curl);
             return NULL;
         }
@@ -116,4 +92,52 @@ cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_
     free(response.data);
 
     return json;
+}
+
+cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_count) {
+    const Settings *settings = Settings_Get();
+    if (!settings->api_key[0]) {
+        return NULL; /* not configured yet */
+    }
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return NULL;
+    }
+
+    /* curl_easy_escape needs the handle, so the URL is built after init. */
+    char *api_key = curl_easy_escape(curl, settings->api_key, 0);
+    if (!api_key) {
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
+
+    char url[RA_API_URL_MAX];
+    int written = snprintf(url, sizeof(url), "%s%s.php?y=%s",
+                           RA_API_BASE_URL, endpoint, api_key);
+    curl_free(api_key);
+
+    if (written < 0 || (size_t)written >= sizeof(url)) {
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
+
+    return CURL_GetJson(curl, url, sizeof(url), (size_t)written, params, param_count);
+}
+
+cJSON *RA_GetInternalRequest(const char *path, const RA_Param *params, size_t param_count) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return NULL;
+    }
+
+    /* No API key: this is the website's own endpoint, not the public API. */
+    char url[RA_API_URL_MAX];
+    int written = snprintf(url, sizeof(url), "%s%s?", RA_INTERNAL_BASE_URL, path);
+    if (written < 0 || (size_t)written >= sizeof(url)) {
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
+
+    return CURL_GetJson(curl, url, sizeof(url), (size_t)written, params, param_count);
 }

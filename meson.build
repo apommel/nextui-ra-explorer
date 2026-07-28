@@ -20,6 +20,7 @@ sources = files(
   'src/app/settings.c',
   'src/app/views.c',
   'src/ra_api/client.c',
+  'src/ra_api/game.c',
   'src/ra_api/images.c',
   'src/ra_api/user.c',
   'src/util/paths.c',

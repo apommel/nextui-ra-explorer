@@ -19,6 +19,9 @@ void SettingsView(void);
 /* The signed-in user's recently played games; opens GameDetailView on select. */
 void RecentGamesView(void);
 
+/* Game search by title, opening GameDetailView on select. */
+void SearchGamesView(void);
+
 /* The signed-in user's most recently unlocked achievements, across all games. */
 void RecentAchievementsView(void);
 
