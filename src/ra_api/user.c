@@ -15,11 +15,15 @@ cJSON *RA_GetUserRecentAchievements(const char *user, int minutes) {
     return json;
 }
 
-cJSON *RA_GetUserRecentlyPlayedGames(const char *user) {
+cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count) {
+    if (count > 50) count = 50;
+    char count_str[3];
+    snprintf(count_str, sizeof(count_str), "%d", count);
     RA_Param params[] = {
         { "u", user },
+        { "c", count_str },
     };
-    cJSON *json = RA_GetRequest("GetUserRecentlyPlayedGames", params, 1);
+    cJSON *json = RA_GetRequest("GetUserRecentlyPlayedGames", params, 2);
     return json;
 }
 

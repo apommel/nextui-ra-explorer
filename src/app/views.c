@@ -678,7 +678,7 @@ void RecentGamesView(void) {
         return;
     }
 
-    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username);
+    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, 50);
 
     int n_games = cJSON_GetArraySize(json);
     if (n_games <= 0) {
