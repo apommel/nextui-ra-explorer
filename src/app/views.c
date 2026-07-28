@@ -586,40 +586,63 @@ void GameDetailView(int game_id) {
         return;
     }
 
-    /* Released arrives as "1992-06-02 00:00:00"; keep just the date part. */
+    /* Released is "2004-11-18", or "1992-06-02 00:00:00" on older records;
+       either way keep just the date part. */
     char released[11];
     snprintf(released, sizeof(released), "%s", GetStringValue(json, "Released"));
 
-    int n_achievements = GetIntValue(json, "NumAchievements");
+    int n_achievements  = GetIntValue(json, "NumAchievements");
+    int earned          = GetIntValue(json, "NumAwardedToUser");
+    int earned_hardcore = GetIntValue(json, "NumAwardedToUserHardcore");
+
+    /* Count, share and mode on one line. Where every unlock is hardcore — the
+       common case — a bare suffix says so without spending a second row. */
+    char progress[80];
+    snprintf(progress, sizeof(progress), "%d / %d (%s)%s",
+        earned, n_achievements, GetStringValue(json, "UserCompletion"),
+        (earned > 0 && earned_hardcore == earned) ? " hardcore" : "");
+
+    /* A separate row only when the two genuinely differ; all-hardcore is
+       covered by the suffix above, and all-softcore needs no annotation. */
+    bool mixed_modes = earned_hardcore > 0 && earned_hardcore < earned;
+    char progress_hardcore[80];
+    if (mixed_modes) {
+        snprintf(progress_hardcore, sizeof(progress_hardcore), "%d / %d (%s)",
+            earned_hardcore, n_achievements,
+            GetStringValue(json, "UserCompletionHardcore"));
+    }
+
+    /* UserTotalPlaytime is seconds. */
     int playtime_min = GetIntValue(json, "UserTotalPlaytime") / 60;
-
-    char earned[32];
-    snprintf(earned, sizeof(earned), "%d / %d",
-        GetIntValue(json, "NumAwardedToUser"), n_achievements);
-
-    char earned_hardcore[32];
-    snprintf(earned_hardcore, sizeof(earned_hardcore), "%d / %d",
-        GetIntValue(json, "NumAwardedToUserHardcore"), n_achievements);
-
     char playtime[32];
     snprintf(playtime, sizeof(playtime), "%dh %02dm", playtime_min / 60, playtime_min % 60);
 
     /* Values either point into json or into the buffers above, all of which
        outlive ap_detail_screen. */
+    ap_detail_info_pair progress_pairs[4];
+    int progress_count = 0;
+
+    progress_pairs[progress_count++] = (ap_detail_info_pair){ "Achievements", progress };
+    if (mixed_modes) {
+        progress_pairs[progress_count++] = (ap_detail_info_pair){ "Hardcore", progress_hardcore };
+    }
+    progress_pairs[progress_count++] = (ap_detail_info_pair){ "Playtime", playtime };
+
+    /* HighestAwardKind is absent until the game earns one, so skip the row
+       rather than showing a dash. */
+    const char *award = GetStringOrNull(json, "HighestAwardKind");
+    char award_text[48];
+    if (award) {
+        FormatSnakeCase(award, award_text, sizeof(award_text));
+        progress_pairs[progress_count++] = (ap_detail_info_pair){ "Award", award_text };
+    }
+
     ap_detail_info_pair info_pairs[] = {
         { "Console",   GetStringValue(json, "ConsoleName") },
         { "Developer", GetStringValue(json, "Developer") },
         { "Publisher", GetStringValue(json, "Publisher") },
         { "Genre",     GetStringValue(json, "Genre") },
         { "Released",  released },
-    };
-
-    ap_detail_info_pair progress_pairs[] = {
-        { "Achievements", earned },
-        { "Hardcore",     earned_hardcore },
-        { "Completion",   GetStringValue(json, "UserCompletion") },
-        { "Playtime",     playtime },
-        { "Award",        GetStringValue(json, "HighestAwardKind") },
     };
 
     /* The detail screen loads image_path itself and owns the texture, so this
@@ -636,14 +659,15 @@ void GameDetailView(int game_id) {
         sections[section_count++] = (ap_detail_section){
             .type = AP_SECTION_IMAGE, .image_path = title_image };
     }
+    /* Progress leads: it is what the screen is opened for. */
+    sections[section_count++] = (ap_detail_section){
+        .type = AP_SECTION_INFO, .title = "Your Progress",
+        .info_pairs = progress_pairs,
+        .info_count = progress_count };
     sections[section_count++] = (ap_detail_section){
         .type = AP_SECTION_INFO, .title = "Info",
         .info_pairs = info_pairs,
         .info_count = sizeof(info_pairs) / sizeof(info_pairs[0]) };
-    sections[section_count++] = (ap_detail_section){
-        .type = AP_SECTION_INFO, .title = "Your Progress",
-        .info_pairs = progress_pairs,
-        .info_count = sizeof(progress_pairs) / sizeof(progress_pairs[0]) };
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Back" },
