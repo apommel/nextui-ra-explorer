@@ -11,7 +11,7 @@
 void MainView(void);
 
 /* Modal message with a single OK button. */
-void ErrorView(const char *message);
+void InfoView(const char *message);
 
 /* Username and API key editor; writes to settings.json on save. */
 void SettingsView(void);

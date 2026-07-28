@@ -193,7 +193,7 @@ void MainView(void) {
     }
 }
 
-void ErrorView(const char *message) {
+void InfoView(const char *message) {
     ap_footer_item footer[] = {
         { .button = AP_BTN_A, .label = "OK", .is_confirm = true },
     };
@@ -267,7 +267,7 @@ void SettingsView(void) {
 
         if (result.action == AP_ACTION_SELECTED && result.focused_index == ROW_CLEAR_CACHE) {
             if (!RA_ClearImageCache()) {
-                ErrorView("Some cached images could not be deleted.");
+                InfoView("Some cached images could not be deleted.");
             }
             FormatCacheUsage(cache_usage, sizeof(cache_usage));
 
@@ -284,7 +284,7 @@ void SettingsView(void) {
 
             Settings_Set(&updated);
             if (!Settings_Save()) {
-                ErrorView("Failed to save settings.");
+                InfoView("Failed to save settings.");
             }
         }
         break;
@@ -299,7 +299,7 @@ void SettingsView(void) {
 void AchievementsListView(const char *game_title, cJSON *achievements) {
     int count = cJSON_GetArraySize(achievements);
     if (count <= 0) {
-        ErrorView("This game has no achievements.");
+        InfoView("This game has no achievements.");
         return;
     }
 
@@ -401,14 +401,14 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
 
 void RecentAchievementsView(void) {
     if (!Settings_IsConfigured()) {
-        ErrorView("Set your username and API key in Settings first.");
+        InfoView("Set your username and API key in Settings first.");
         return;
     }
 
     cJSON *json = RA_GetUserRecentAchievements(Settings_Get()->username,
                                                RECENT_ACHIEVEMENTS_MINUTES);
     if (!json) {
-        ErrorView("Failed to get recent achievements from RetroAchievements.");
+        InfoView("Failed to get recent achievements from RetroAchievements.");
         return;
     }
 
@@ -416,7 +416,7 @@ void RecentAchievementsView(void) {
     int count = cJSON_GetArraySize(json);
     if (count <= 0) {
         cJSON_Delete(json);
-        ErrorView("No achievements unlocked in the past week.");
+        InfoView("No achievements unlocked in the past week.");
         return;
     }
 
@@ -582,7 +582,7 @@ void GameDetailView(int game_id) {
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
     if (!cJSON_IsString(title)) {
         cJSON_Delete(json);
-        ErrorView("Failed to get game details from RetroAchievements.");
+        InfoView("Failed to get game details from RetroAchievements.");
         return;
     }
 
@@ -674,7 +674,7 @@ void GameDetailView(int game_id) {
 
 void RecentGamesView(void) {
     if (!Settings_IsConfigured()) {
-        ErrorView("Set your username and API key in Settings first.");
+        InfoView("Set your username and API key in Settings first.");
         return;
     }
 
@@ -683,7 +683,7 @@ void RecentGamesView(void) {
     int n_games = cJSON_GetArraySize(json);
     if (n_games <= 0) {
         cJSON_Delete(json);
-        ErrorView("Failed to get list of games from RetroAchievements.");
+        InfoView("Failed to get list of games from RetroAchievements.");
         return;
     }
 
