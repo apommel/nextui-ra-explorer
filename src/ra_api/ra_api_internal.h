@@ -2,6 +2,9 @@
 #define RA_API_INTERNAL_H
 
 #include <stddef.h>
+
+#include <curl/curl.h>
+
 #include "cjson/cJSON.h"
 
 /* A single query string parameter, e.g. { "g", "14402" } -> "&g=14402".
@@ -10,6 +13,12 @@ typedef struct {
     const char *key;
     const char *value;
 } RA_Param;
+
+/* Applies the options every request shares, including the CA bundle. On the
+   device curl is statically linked against our own OpenSSL, so there is no
+   system trust store: SSL_CERT_FILE must point at a bundle or every HTTPS
+   request fails verification. Desktop builds use the system store and ignore it. */
+void CURL_ApplyCommonOptions(CURL *curl);
 
 /* Performs a GET request against the RetroAchievements API endpoint
    (the part after "API_", without the ".php" suffix) and parses the response.

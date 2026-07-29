@@ -1,6 +1,7 @@
 #define RA_API_BASE_URL "https://retroachievements.org/API/API_"
 #define RA_INTERNAL_BASE_URL "https://retroachievements.org/internal-api/"
 #define RA_API_URL_MAX 1024
+#define RA_USER_AGENT "nextui-ra-explorer/1.0"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -56,6 +57,16 @@ static bool CURL_AppendParam(char *url, size_t url_size, size_t *url_len, CURL *
     return ok;
 }
 
+void CURL_ApplyCommonOptions(CURL *curl) {
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, RA_USER_AGENT);
+
+    const char *ca_bundle = getenv("SSL_CERT_FILE");
+    if (ca_bundle && ca_bundle[0]) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
+    }
+}
+
 /* Appends params to a URL that already carries its "?", fetches it and parses
    the body as JSON. Takes ownership of the handle. */
 static cJSON *CURL_GetJson(CURL *curl, char *url, size_t url_size, size_t url_len,
@@ -77,8 +88,7 @@ static cJSON *CURL_GetJson(CURL *curl, char *url, size_t url_size, size_t url_le
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CURL_WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "nextui-ra-explorer/1.0");
+    CURL_ApplyCommonOptions(curl);
 
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);

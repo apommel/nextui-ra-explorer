@@ -9,6 +9,7 @@
 #include <curl/curl.h>
 
 #include "ra_api/images.h"
+#include "ra_api/ra_api_internal.h"
 #include "util/paths.h"
 
 #define RA_MEDIA_BASE_URL "https://media.retroachievements.org"
@@ -35,9 +36,8 @@ static bool RA_DownloadImage(const char *url, const char *dest_path) {
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L); /* treat 404 etc. as an error */
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "nextui-ra-explorer/1.0");
+    CURL_ApplyCommonOptions(curl);
 
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
