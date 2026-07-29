@@ -13,3 +13,9 @@ subprojects/*
 # Captured API responses kept for reference, not part of the build
 api_call.json
 *.api.json
+
+# go-task checksum cache
+.task/
+
+# Packaged output
+dist/

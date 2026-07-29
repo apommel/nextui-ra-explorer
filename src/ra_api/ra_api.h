@@ -8,6 +8,19 @@
 
 #include "cjson/cJSON.h"
 
+/* Why the last request failed. A rejected key and an unreachable server need
+   different advice, and the API distinguishes them clearly: bad credentials
+   come back as HTTP 401, while no connection fails before any response. */
+typedef enum {
+    RA_ERROR_NONE = 0,
+    RA_ERROR_NETWORK,       /* server unreachable, timed out, DNS failure */
+    RA_ERROR_UNAUTHORIZED,  /* API key missing or rejected */
+    RA_ERROR_OTHER,
+} RA_Error;
+
+/* The failure behind the most recent NULL from any RA_ call. */
+RA_Error RA_GetLastError(void);
+
 cJSON *RA_GetUserRecentAchievements(const char *user, int minutes);
 cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count);
 cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id);

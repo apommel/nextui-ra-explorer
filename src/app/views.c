@@ -159,6 +159,27 @@ static int CompareAchievements(const void *a, const void *b) {
 /* ── Navigation ──────────────────────────────────────────────────────────────
 */
 
+/* Reports a failed request, naming the cause where the API lets us tell them
+   apart, so a wrong key does not read as "the server is down". */
+static void RequestFailedView(const char *what) {
+    const char *reason;
+    switch (RA_GetLastError()) {
+    case RA_ERROR_UNAUTHORIZED:
+        reason = "Invalid API key. Check it in Settings.";
+        break;
+    case RA_ERROR_NETWORK:
+        reason = "Could not reach RetroAchievements. Check the network connection.";
+        break;
+    default:
+        reason = "RetroAchievements returned an unexpected response.";
+        break;
+    }
+
+    char message[256];
+    snprintf(message, sizeof(message), "%s %s", what, reason);
+    InfoView(message);
+}
+
 /* Guards views that hit the public API, which needs credentials. Search is the
    exception — it goes through the website endpoint and takes no key — so a game
    reached from search results has to be checked here rather than at the list. */
@@ -305,7 +326,7 @@ static void OpenGameAchievements(int game_id) {
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
     if (!cJSON_IsString(title)) {
         cJSON_Delete(json);
-        InfoView("Failed to get game details from RetroAchievements.");
+        RequestFailedView("Could not load this game.");
         return;
     }
 
@@ -535,7 +556,7 @@ void SearchGamesView(void) {
 
     cJSON *games = RA_SearchGames(query.text, RA_GAME_LIST_MAX);
     if (!games) {
-        InfoView("Search failed. RetroAchievements may be unreachable.");
+        RequestFailedView("Search failed.");
         return;
     }
 
@@ -576,7 +597,7 @@ void RecentAchievementsView(void) {
     cJSON *json = RA_GetUserRecentAchievements(Settings_Get()->username,
                                                RECENT_ACHIEVEMENTS_MINUTES);
     if (!json) {
-        InfoView("Failed to get recent achievements from RetroAchievements.");
+        RequestFailedView("Could not load recent achievements.");
         return;
     }
 
@@ -732,7 +753,7 @@ void GameDetailView(int game_id) {
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
     if (!cJSON_IsString(title)) {
         cJSON_Delete(json);
-        InfoView("Failed to get game details from RetroAchievements.");
+        RequestFailedView("Could not load this game.");
         return;
     }
 
@@ -854,11 +875,16 @@ void RecentGamesView(void) {
     if (!RequireSettings()) return;
 
     cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, RA_GAME_LIST_MAX);
+    if (!json) {
+        RequestFailedView("Could not load your games.");
+        return;
+    }
 
+    /* An empty list is a valid answer, unlike a failed request. */
     int count = cJSON_GetArraySize(json);
     if (count <= 0) {
         cJSON_Delete(json);
-        InfoView("Failed to get list of games from RetroAchievements.");
+        InfoView("No recently played games found for this user.");
         return;
     }
 

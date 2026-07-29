@@ -11,12 +11,19 @@
 
 #include "cjson/cJSON.h"
 #include "app/settings.h"
+#include "ra_api.h"
 #include "ra_api_internal.h"
 
 typedef struct {
     char *data;
     size_t size;
 } CURL_Response;
+
+static RA_Error g_last_error = RA_ERROR_NONE;
+
+RA_Error RA_GetLastError(void) {
+    return g_last_error;
+}
 
 static size_t CURL_WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata) {
     size_t chunk_size = size * nmemb;
@@ -91,9 +98,27 @@ static cJSON *CURL_GetJson(CURL *curl, char *url, size_t url_size, size_t url_le
     CURL_ApplyCommonOptions(curl);
 
     CURLcode res = curl_easy_perform(curl);
+
+    long http_status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
+        /* No usable response at all — DNS, connection or timeout. */
+        g_last_error = RA_ERROR_NETWORK;
+        free(response.data);
+        return NULL;
+    }
+
+    /* A rejected key still returns a well-formed JSON body, so the status has
+       to be checked or the error document is mistaken for a result. */
+    if (http_status == 401 || http_status == 403) {
+        g_last_error = RA_ERROR_UNAUTHORIZED;
+        free(response.data);
+        return NULL;
+    }
+    if (http_status >= 400) {
+        g_last_error = RA_ERROR_OTHER;
         free(response.data);
         return NULL;
     }
@@ -101,13 +126,17 @@ static cJSON *CURL_GetJson(CURL *curl, char *url, size_t url_size, size_t url_le
     cJSON *json = cJSON_Parse(response.data);
     free(response.data);
 
+    if (!json) g_last_error = RA_ERROR_OTHER;
     return json;
 }
 
 cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_count) {
+    g_last_error = RA_ERROR_NONE;
+
     const Settings *settings = Settings_Get();
     if (!settings->api_key[0]) {
-        return NULL; /* not configured yet */
+        g_last_error = RA_ERROR_UNAUTHORIZED; /* not configured yet */
+        return NULL;
     }
 
     CURL *curl = curl_easy_init();
@@ -136,6 +165,8 @@ cJSON *RA_GetRequest(const char *endpoint, const RA_Param *params, size_t param_
 }
 
 cJSON *RA_GetInternalRequest(const char *path, const RA_Param *params, size_t param_count) {
+    g_last_error = RA_ERROR_NONE;
+
     CURL *curl = curl_easy_init();
     if (!curl) {
         return NULL;
