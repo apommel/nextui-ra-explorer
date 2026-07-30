@@ -9,6 +9,17 @@ for NextUI.
 
 This project has been created with the assistance of Claude Code.
 
+## Screenshots
+
+|  |  |
+|:--|:--|
+| **Main menu** | **Recently played games** |
+| ![Main menu](screenshots/main_menu.png) | ![Recently played games](screenshots/game_list.png) |
+| **Game details** | **Achievements** |
+| ![Game details](screenshots/game_details.png) | ![Achievements](screenshots/achievements_list.png) |
+| **Achievement details** | **Profile** |
+| ![Achievement details](screenshots/achievement_details.png) | ![Profile](screenshots/profile.png) |
+
 ## Screens
 
 | Screen | Contents |
