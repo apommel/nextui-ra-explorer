@@ -29,7 +29,11 @@ typedef struct {
     int       count;
 } IconLoader;
 
-/* Installs the loader on opts and enables the list's image column. */
+/* Installs the loader on opts and enables the list's image column.
+
+   Also loads the first screenful before returning, so the list is not drawn
+   half-empty — on a cold cache this blocks for as long as those few downloads
+   take. Call it once opts->items is populated and just before ap_list. */
 void IconLoader_Attach(ap_list_opts *opts, IconLoader *loader);
 
 /* Frees every texture the loader put on the items. */
