@@ -15,6 +15,12 @@ int main(void) {
     ap_init(&cfg);
 
     Settings_Load();
+    if (!Settings_IsConfigured()) {
+        InfoView("Enter your RetroAchievements username and API key, then press "
+                 "START to save. Your API key is on the RetroAchievements "
+                 "website, under Settings > Applications.");
+        SettingsView();
+    }
 
     MainView();
 

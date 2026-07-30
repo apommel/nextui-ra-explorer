@@ -61,11 +61,12 @@ build and dist directory.
 `dist/<platform>/RA Explorer.pak` to that directory on the SD card.
 
 On first run, open Settings and enter your RetroAchievements username and web
-API key. Saving verifies them against the site, so a mistyped key is reported
-straight away rather than surfacing later as an empty list. The key is on your
-RetroAchievements control panel under "Keys". It is stored in `settings.json`
-under `$SHARED_USERDATA_PATH/ra-explorer` on device, or `~/.userdata/ra-explorer`
-otherwise, and can be edited there directly.
+API key, found on the RetroAchievements website under Settings > Applications.
+Saving verifies them against the site.
+
+Settings are stored in `settings.json` under `$SHARED_USERDATA_PATH/ra-explorer`
+on device, or `~/.userdata/ra-explorer` otherwise, and can be edited there
+directly.
 
 Downloaded icons are cached alongside it in `images/`. Settings shows how much
 space they use and can clear them.
