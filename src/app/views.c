@@ -41,13 +41,13 @@ static int GetIntValue(cJSON *json, const char *key) {
    which fields exist at all, so each gets its own mapper and the detail view
    sees only the common shape. */
 
-/* An entry of the "Achievements" object from GetGameInfoAndUserProgress. */
-static Achievement AchievementFromGameProgress(cJSON *entry) {
+/* An entry of the "Achievements" object from GetGameInfoAndUserProgress.
+   num_players comes from the enclosing game, which the entry cannot see. */
+static Achievement AchievementFromGameProgress(cJSON *entry, int num_players) {
     return (Achievement){
         .title                = GetStringOrNull(entry, "Title"),
         .description          = GetStringOrNull(entry, "Description"),
         .badge_name           = GetStringOrNull(entry, "BadgeName"),
-        .author               = GetStringOrNull(entry, "Author"),
         .type                 = GetStringOrNull(entry, "Type"),
         .game_title           = NULL, /* the whole list is one game */
         /* No jump back to the game: it is already one B press away, and
@@ -60,6 +60,7 @@ static Achievement AchievementFromGameProgress(cJSON *entry) {
         .true_ratio           = GetIntValue(entry, "TrueRatio"),
         .num_awarded          = GetIntValue(entry, "NumAwarded"),
         .num_awarded_hardcore = GetIntValue(entry, "NumAwardedHardcore"),
+        .num_players          = num_players,
     };
 }
 
@@ -72,7 +73,6 @@ static Achievement AchievementFromRecent(cJSON *entry) {
         .title                = GetStringOrNull(entry, "Title"),
         .description          = GetStringOrNull(entry, "Description"),
         .badge_name           = GetStringOrNull(entry, "BadgeName"),
-        .author               = GetStringOrNull(entry, "Author"),
         .type                 = GetStringOrNull(entry, "Type"),
         .game_title           = GetStringOrNull(entry, "GameTitle"),
         /* Reached from a cross-game list, so the game screen is worth offering. */
@@ -82,9 +82,10 @@ static Achievement AchievementFromRecent(cJSON *entry) {
                                 (cJSON_IsNumber(hardcore) && cJSON_GetNumberValue(hardcore) != 0),
         .points               = GetIntValue(entry, "Points"),
         .true_ratio           = GetIntValue(entry, "TrueRatio"),
-        /* This endpoint carries no award counts. */
+        /* This endpoint carries neither award counts nor a player total. */
         .num_awarded          = -1,
         .num_awarded_hardcore = -1,
+        .num_players          = -1,
     };
 }
 
@@ -331,7 +332,8 @@ static void OpenGameAchievements(int game_id) {
     }
 
     AchievementsListView(cJSON_GetStringValue(title),
-                         cJSON_GetObjectItemCaseSensitive(json, "Achievements"));
+                         cJSON_GetObjectItemCaseSensitive(json, "Achievements"),
+                         GetIntValue(json, "NumDistinctPlayers"));
     cJSON_Delete(json);
 }
 
@@ -490,7 +492,7 @@ void SettingsView(void) {
     free((void *)api_key_option[0].value);
 }
 
-void AchievementsListView(const char *game_title, cJSON *achievements) {
+void AchievementsListView(const char *game_title, cJSON *achievements, int num_players) {
     int count = cJSON_GetArraySize(achievements);
     if (count <= 0) {
         InfoView("This game has no achievements.");
@@ -527,7 +529,7 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     qsort(entries, (size_t)count, sizeof(*entries), CompareAchievements);
 
     for (i = 0; i < count; i++) {
-        rows[i].achievement = AchievementFromGameProgress(entries[i].achievement);
+        rows[i].achievement = AchievementFromGameProgress(entries[i].achievement, num_players);
 
         /* RA publishes a grayscale variant of every badge at "<name>_lock.png",
            so locked rows need no local image processing. */
@@ -771,14 +773,22 @@ void AchievementDetailView(const Achievement *achievement) {
     }
 
     char type[48];
-    FormatSnakeCase(achievement->type ? achievement->type : "-", type, sizeof(type));
+    if (achievement->type) FormatSnakeCase(achievement->type, type, sizeof(type));
 
+    /* How rare the achievement is, which reads better than a raw count. Both
+       shares use the same denominator so they can be compared directly. */
     char won_by[64];
-    snprintf(won_by, sizeof(won_by), "%d (%d hardcore)",
-        achievement->num_awarded, achievement->num_awarded_hardcore);
+    if (achievement->num_players > 0) {
+        snprintf(won_by, sizeof(won_by), "%.1f%% (%.1f%% hardcore)",
+            100.0 * achievement->num_awarded / achievement->num_players,
+            100.0 * achievement->num_awarded_hardcore / achievement->num_players);
+    } else {
+        snprintf(won_by, sizeof(won_by), "%d (%d hardcore)",
+            achievement->num_awarded, achievement->num_awarded_hardcore);
+    }
 
     /* Built row by row, since not every source fills in every field. */
-    ap_detail_info_pair info_pairs[6];
+    ap_detail_info_pair info_pairs[5];
     int info_count = 0;
 
     info_pairs[info_count++] = (ap_detail_info_pair){ "Unlocked", unlocked_at };
@@ -788,12 +798,13 @@ void AchievementDetailView(const Achievement *achievement) {
     }
 
     info_pairs[info_count++] = (ap_detail_info_pair){ "Points", points };
-    info_pairs[info_count++] = (ap_detail_info_pair){ "Type", type };
-    info_pairs[info_count++] = (ap_detail_info_pair){
-        "Author", achievement->author ? achievement->author : "-" };
+    if (achievement->type) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Type", type };
+    }
 
     if (achievement->num_awarded >= 0) {
-        info_pairs[info_count++] = (ap_detail_info_pair){ "Won By", won_by };
+        info_pairs[info_count++] = (ap_detail_info_pair){
+            achievement->num_players > 0 ? "Unlock Rate" : "Won By", won_by };
     }
 
     ap_detail_section sections[3];
@@ -972,7 +983,8 @@ void GameDetailView(int game_id) {
         if (result.action != AP_DETAIL_SECONDARY_ACTION) break;
 
         AchievementsListView(cJSON_GetStringValue(title),
-                             cJSON_GetObjectItemCaseSensitive(json, "Achievements"));
+                             cJSON_GetObjectItemCaseSensitive(json, "Achievements"),
+                             GetIntValue(json, "NumDistinctPlayers"));
     }
 
     cJSON_Delete(json);
