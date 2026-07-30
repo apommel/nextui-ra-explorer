@@ -181,6 +181,32 @@ static void RequestFailedView(const char *what) {
     InfoView(message);
 }
 
+/* Confirms the credentials and captures the account's stable id, which is the
+   only way to get it: no endpoint reports who the API key belongs to, so the
+   username has to be resolved once.
+
+   Writes the canonical username and ULID into `settings` and returns true, or
+   leaves them untouched and returns false. Reporting is left to the caller, so
+   it can be said after the save it does not prevent. */
+static bool ResolveUser(Settings *settings) {
+    cJSON *json = RA_GetUserProfile(settings->username);
+
+    const char *canonical = json ? GetStringOrNull(json, "User") : NULL;
+    const char *ulid = json ? GetStringOrNull(json, "ULID") : NULL;
+
+    if (!canonical || !ulid) {
+        cJSON_Delete(json);
+        return false;
+    }
+
+    /* Take the site's spelling, so the profile screen matches RA exactly. */
+    snprintf(settings->username, sizeof(settings->username), "%s", canonical);
+    snprintf(settings->ulid, sizeof(settings->ulid), "%s", ulid);
+
+    cJSON_Delete(json);
+    return true;
+}
+
 /* Guards views that hit the public API, which needs credentials. Search is the
    exception — it goes through the website endpoint and takes no key — so a game
    reached from search results has to be checked here rather than at the list. */
@@ -322,7 +348,7 @@ static void AchievementListView(const char *screen_title,
 static void OpenGameAchievements(int game_id) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetGameInfoAndUserProgress(Settings_Get()->username, game_id);
+    cJSON *json = RA_GetGameInfoAndUserProgress(Settings_UserRef(), game_id);
 
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
     if (!cJSON_IsString(title)) {
@@ -478,9 +504,28 @@ void SettingsView(void) {
             snprintf(updated.api_key, sizeof(updated.api_key), "%s", api_key_option[0].value);
             updated.unlocked_first = (items[ROW_UNLOCKED_FIRST].selected_option == 0);
 
+            /* Credentials changed, so the stored id no longer applies. */
+            bool credentials_changed =
+                strcmp(updated.username, settings->username) != 0 ||
+                strcmp(updated.api_key, settings->api_key) != 0;
+            if (credentials_changed) {
+                updated.ulid[0] = '\0';
+            }
+
+            /* Set first: resolving issues a request, which needs the new key.
+               A failure only costs the ULID, never the save. */
             Settings_Set(&updated);
+
+            bool resolved = true;
+            if (credentials_changed && updated.username[0] && updated.api_key[0]) {
+                resolved = ResolveUser(&updated);
+                if (resolved) Settings_Set(&updated);
+            }
+
             if (!Settings_Save()) {
                 InfoView("Failed to save settings.");
+            } else if (!resolved) {
+                RequestFailedView("Settings saved, but the account could not be verified.");
             }
         }
         break;
@@ -548,7 +593,7 @@ void AchievementsListView(const char *game_title, cJSON *achievements, int num_p
 void ProfileView(void) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetUserProfile(Settings_Get()->username);
+    cJSON *json = RA_GetUserProfile(Settings_UserRef());
 
     cJSON *user = cJSON_GetObjectItemCaseSensitive(json, "User");
     if (!cJSON_IsString(user)) {
@@ -698,7 +743,7 @@ void SearchGamesView(void) {
 void RecentAchievementsView(void) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetUserRecentAchievements(Settings_Get()->username,
+    cJSON *json = RA_GetUserRecentAchievements(Settings_UserRef(),
                                                RECENT_ACHIEVEMENTS_MINUTES);
     if (!json) {
         RequestFailedView("Could not load recent achievements.");
@@ -866,7 +911,7 @@ void AchievementDetailView(const Achievement *achievement) {
 void GameDetailView(int game_id) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetGameInfoAndUserProgress(Settings_Get()->username, game_id);
+    cJSON *json = RA_GetGameInfoAndUserProgress(Settings_UserRef(), game_id);
 
     cJSON *title = cJSON_GetObjectItemCaseSensitive(json, "Title");
     if (!cJSON_IsString(title)) {
@@ -993,7 +1038,7 @@ void GameDetailView(int game_id) {
 void RecentGamesView(void) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, RA_LIST_MAX);
+    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_UserRef(), RA_LIST_MAX);
     if (!json) {
         RequestFailedView("Could not load your games.");
         return;

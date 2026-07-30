@@ -8,6 +8,10 @@
 typedef struct {
     char username[SETTINGS_VALUE_MAX];
     char api_key[SETTINGS_VALUE_MAX];
+    /* Stable id for the account. Usernames can be changed on the website, so
+       requests prefer this once it is known. Empty until resolved, which is
+       never fatal — see Settings_UserRef. */
+    char ulid[SETTINGS_VALUE_MAX];
     bool unlocked_first; /* List unlocked achievements before locked ones. */
 } Settings;
 
@@ -26,5 +30,10 @@ void Settings_Set(const Settings *settings);
 
 /* True once both a username and an API key are present. */
 bool Settings_IsConfigured(void);
+
+/* How to name the configured user in a request: the ULID when it has been
+   resolved, otherwise the username. Both are accepted by every user-scoped
+   endpoint, so an unresolved ULID only costs stability across a rename. */
+const char *Settings_UserRef(void);
 
 #endif /* SETTINGS_H */

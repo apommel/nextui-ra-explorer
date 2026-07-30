@@ -30,6 +30,10 @@ void Settings_Set(const Settings *settings) {
     if (settings) g_settings = *settings;
 }
 
+const char *Settings_UserRef(void) {
+    return g_settings.ulid[0] ? g_settings.ulid : g_settings.username;
+}
+
 bool Settings_IsConfigured(void) {
     return g_settings.username[0] != '\0' && g_settings.api_key[0] != '\0';
 }
@@ -78,6 +82,9 @@ bool Settings_Load(void) {
     snprintf(loaded.username, sizeof(loaded.username), "%s", username ? username : "");
     snprintf(loaded.api_key, sizeof(loaded.api_key), "%s", api_key ? api_key : "");
 
+    const char *ulid = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "ulid"));
+    snprintf(loaded.ulid, sizeof(loaded.ulid), "%s", ulid ? ulid : "");
+
     cJSON *unlocked_first = cJSON_GetObjectItemCaseSensitive(json, "unlocked_first");
     if (cJSON_IsBool(unlocked_first)) {
         loaded.unlocked_first = cJSON_IsTrue(unlocked_first);
@@ -106,6 +113,7 @@ bool Settings_Save(void) {
     }
     cJSON_AddStringToObject(json, "username", g_settings.username);
     cJSON_AddStringToObject(json, "api_key", g_settings.api_key);
+    cJSON_AddStringToObject(json, "ulid", g_settings.ulid);
     cJSON_AddBoolToObject(json, "unlocked_first", g_settings.unlocked_first);
 
     char *text = cJSON_Print(json);

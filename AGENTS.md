@@ -109,6 +109,11 @@ tag). Prefer working within it; a local patch is a maintenance burden.
 - **Image paths come in two shapes.** The public API returns paths like
   `/Images/067895.png`; the search endpoint returns absolute URLs.
   `RA_GetImage` accepts either.
+- **No endpoint reports who the API key belongs to.** Every user-scoped call
+  needs an explicit `u`, which accepts a username or a ULID interchangeably.
+  Usernames are not stable — users can rename — so Settings resolves one to a
+  ULID via `GetUserProfile` when credentials change, and `Settings_UserRef()`
+  returns whichever is available. Resolution failing is never fatal.
 - **`cJSON_GetNumberValue` returns NaN for a missing field**, and casting NaN
   to `int` is undefined behaviour. Use the `GetIntValue` helper.
 
