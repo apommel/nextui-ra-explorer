@@ -22,6 +22,7 @@ typedef enum {
 /* The failure behind the most recent NULL from any RA_ call. */
 RA_Error RA_GetLastError(void);
 
+cJSON *RA_GetUserProfile(const char *user);
 cJSON *RA_GetUserRecentAchievements(const char *user, int minutes);
 cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count);
 cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id);

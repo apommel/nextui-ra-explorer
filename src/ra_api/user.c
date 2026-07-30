@@ -4,6 +4,14 @@
 #include "ra_api_internal.h"
 #include "ra_api.h"
 
+cJSON *RA_GetUserProfile(const char *user) {
+    RA_Param params[] = {
+        { "u", user },
+    };
+    cJSON *json = RA_GetRequest("GetUserProfile", params, 1);
+    return json;
+}
+
 cJSON *RA_GetUserRecentAchievements(const char *user, int minutes) {
     char minutes_str[16];
     snprintf(minutes_str, sizeof(minutes_str), "%d", minutes);

@@ -19,6 +19,9 @@ void SettingsView(void);
 /* The signed-in user's recently played games; opens GameDetailView on select. */
 void RecentGamesView(void);
 
+/* The signed-in user's profile: points, membership and current activity. */
+void ProfileView(void);
+
 /* Game search by title, opening GameDetailView on select. */
 void SearchGamesView(void);
 

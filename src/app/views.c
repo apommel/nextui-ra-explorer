@@ -338,12 +338,13 @@ static void OpenGameAchievements(int game_id) {
 /* ── Views ───────────────────────────────────────────────────────────────── */
 
 void MainView(void) {
-    enum { MENU_RECENT_ACHIEVEMENTS, MENU_RECENT_GAMES, MENU_SEARCH_GAMES };
+    enum { MENU_RECENT_ACHIEVEMENTS, MENU_RECENT_GAMES, MENU_SEARCH_GAMES, MENU_PROFILE };
 
     ap_list_item items[] = {
         [MENU_RECENT_ACHIEVEMENTS] = { .label = "Recent Achievements" },
         [MENU_RECENT_GAMES]        = { .label = "Recently Played Games" },
         [MENU_SEARCH_GAMES]        = { .label = "Search Games" },
+        [MENU_PROFILE]             = { .label = "Profile" },
     };
 
     ap_footer_item footer[] = {
@@ -378,6 +379,9 @@ void MainView(void) {
             }
             else if (result.selected_index == MENU_SEARCH_GAMES) {
                 SearchGamesView();
+            }
+            else if (result.selected_index == MENU_PROFILE) {
+                ProfileView();
             }
         }
     }
@@ -537,6 +541,102 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
 
     free(rows);
     free(entries);
+}
+
+void ProfileView(void) {
+    if (!RequireSettings()) return;
+
+    cJSON *json = RA_GetUserProfile(Settings_Get()->username);
+
+    cJSON *user = cJSON_GetObjectItemCaseSensitive(json, "User");
+    if (!cJSON_IsString(user)) {
+        cJSON_Delete(json);
+        RequestFailedView("Could not load your profile.");
+        return;
+    }
+
+    char avatar[512];
+    bool has_avatar = RA_GetImage(GetStringOrNull(json, "UserPic"),
+                                  avatar, sizeof(avatar));
+
+    char points[64];
+    snprintf(points, sizeof(points), "%d (%d RetroPoints)",
+        GetIntValue(json, "TotalPoints"), GetIntValue(json, "TotalTruePoints"));
+
+    /* MemberSince is "2016-01-02 00:43:04"; the time of day adds nothing. */
+    char member_since[11];
+    snprintf(member_since, sizeof(member_since), "%s", GetStringValue(json, "MemberSince"));
+
+    int softcore = GetIntValue(json, "TotalSoftcorePoints");
+    char softcore_points[32];
+    snprintf(softcore_points, sizeof(softcore_points), "%d", softcore);
+
+    int contributions = GetIntValue(json, "ContribCount");
+    char contributed[64];
+    snprintf(contributed, sizeof(contributed), "%d achievements, %d awarded",
+        contributions, GetIntValue(json, "ContribYield"));
+
+    /* Rows that would only ever read as zero for most accounts are left out. */
+    ap_detail_info_pair info_pairs[5];
+    int info_count = 0;
+
+    info_pairs[info_count++] = (ap_detail_info_pair){ "Points", points };
+    if (softcore > 0) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Softcore", softcore_points };
+    }
+    info_pairs[info_count++] = (ap_detail_info_pair){ "Member Since", member_since };
+
+    const char *activity = GetStringOrNull(json, "RichPresenceMsg");
+    if (activity) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Activity", activity };
+    }
+    if (contributions > 0) {
+        info_pairs[info_count++] = (ap_detail_info_pair){ "Contributed", contributed };
+    }
+
+    ap_detail_section sections[3];
+    int section_count = 0;
+
+    if (has_avatar) {
+        /* Avatars are square like badges, and the section stretches to whatever
+           it is given, so both dimensions match. */
+        int avatar_size = ap_scale(128);
+        sections[section_count++] = (ap_detail_section){
+            .type = AP_SECTION_IMAGE, .image_path = avatar,
+            .image_w = avatar_size, .image_h = avatar_size };
+    }
+
+    const char *motto = GetStringOrNull(json, "Motto");
+    if (motto) {
+        sections[section_count++] = (ap_detail_section){
+            .type = AP_SECTION_DESCRIPTION, .title = "Motto", .description = motto };
+    }
+    sections[section_count++] = (ap_detail_section){
+        .type = AP_SECTION_INFO, .title = "Profile",
+        .info_pairs = info_pairs, .info_count = info_count };
+
+    ap_footer_item footer[] = {
+        { .button = AP_BTN_B, .label = "Back" },
+    };
+
+    ap_detail_opts opts = {
+        .title = cJSON_GetStringValue(user),
+        .sections = sections,
+        .section_count = section_count,
+        .footer = footer,
+        .footer_count = sizeof(footer) / sizeof(footer[0]),
+        .show_section_separator = true,
+    };
+
+    for (;;) {
+        ap_detail_result result;
+        ap_detail_screen(&opts, &result);
+
+        /* A is unbound here, as on the other detail screens. */
+        if (result.action != AP_DETAIL_ACTION) break;
+    }
+
+    cJSON_Delete(json);
 }
 
 void SearchGamesView(void) {
