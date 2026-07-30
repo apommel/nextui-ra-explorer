@@ -67,7 +67,7 @@ tasks:
     cmds:
       - rm -rf "{{.PAK_DIR}}"
       - mkdir -p "{{.PAK_DIR}}"
-      - cp pak/launch.sh "{{.PAK_DIR}}/"
+      - cp pak/launch.sh pak/THIRD-PARTY-NOTICES.txt LICENSE.txt "{{.PAK_DIR}}/"
       - cp {{.CACERT}} "{{.PAK_DIR}}/cacert.pem"
       - chmod +x "{{.PAK_DIR}}/launch.sh"
       - cp {{.DEVICE_BUILD_DIR}}/{{.BIN}} "{{.PAK_DIR}}/{{.BIN}}"
