@@ -247,7 +247,7 @@ static void GameListView(const char *screen_title, const GameListRow *rows, int 
         }
     }
 
-    IconLoader_DestroyTextures(items, count);
+    IconLoader_Release(&loader, items, count);
     free(items);
     free(slots);
 }
@@ -310,7 +310,7 @@ static void AchievementListView(const char *screen_title,
         AchievementDetailView(&rows[result.selected_index].achievement);
     }
 
-    IconLoader_DestroyTextures(items, count);
+    IconLoader_Release(&loader, items, count);
     free(items);
     free(slots);
     free(points);

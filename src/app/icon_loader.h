@@ -14,8 +14,8 @@
    callback, so the list opens immediately and fills in as the user scrolls.
 
    Usage: fill one IconSlot per row with its remote path, point an IconLoader at
-   them, call IconLoader_Attach before ap_list, then IconLoader_DestroyTextures
-   after it returns. The slots must outlive the ap_list call. */
+   them, call IconLoader_Attach before ap_list, then IconLoader_Release after it
+   returns. The slots must outlive the ap_list call. */
 
 #define ICON_PATH_MAX 80
 
@@ -24,19 +24,23 @@ typedef struct {
     bool attempted;           /* set once, so failures are not retried forever */
 } IconSlot;
 
+typedef struct RA_ImageFetcher RA_ImageFetcher;
+
 typedef struct {
-    IconSlot *slots;
-    int       count;
+    IconSlot        *slots;
+    int              count;
+    RA_ImageFetcher *fetcher; /* owned between Attach and Release */
 } IconLoader;
 
 /* Installs the loader on opts and enables the list's image column.
 
    Also loads the first screenful before returning, so the list is not drawn
-   half-empty — on a cold cache this blocks for as long as those few downloads
-   take. Call it once opts->items is populated and just before ap_list. */
+   half-empty — on a cold cache this waits for those few downloads, which run
+   concurrently. Call it once opts->items is populated and just before ap_list. */
 void IconLoader_Attach(ap_list_opts *opts, IconLoader *loader);
 
-/* Frees every texture the loader put on the items. */
-void IconLoader_DestroyTextures(ap_list_item *items, int count);
+/* Cancels any download still running and frees every texture the loader made.
+   Must be called once for each IconLoader_Attach. */
+void IconLoader_Release(IconLoader *loader, ap_list_item *items, int count);
 
 #endif /* ICON_LOADER_H */

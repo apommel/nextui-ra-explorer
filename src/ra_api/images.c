@@ -73,9 +73,21 @@ static bool RA_ImageCachePath(const char *ra_image_path, char *out_path, size_t 
     return snprintf(out_path, out_size, "%s/%s", dir, filename) < (int)out_size;
 }
 
-bool RA_IsImageCached(const char *ra_image_path) {
-    char path[512];
-    return RA_ImageCachePath(ra_image_path, path, sizeof(path)) && access(path, F_OK) == 0;
+bool RA_GetCachedImage(const char *ra_image_path, char *out_path, size_t out_size) {
+    return RA_ImageCachePath(ra_image_path, out_path, out_size) &&
+           access(out_path, F_OK) == 0;
+}
+
+/* Builds the remote URL for an image path. Most endpoints give a path like
+   "/Images/067895.png", but some give the absolute URL; take those as-is. */
+static bool RA_ImageUrl(const char *ra_image_path, char *out_url, size_t out_size) {
+    bool absolute = strncmp(ra_image_path, "http://", 7) == 0 ||
+                    strncmp(ra_image_path, "https://", 8) == 0;
+    int written = absolute
+        ? snprintf(out_url, out_size, "%s", ra_image_path)
+        : snprintf(out_url, out_size, "%s%s", RA_MEDIA_BASE_URL, ra_image_path);
+
+    return written > 0 && (size_t)written < out_size;
 }
 
 bool RA_GetImage(const char *ra_image_path, char *out_path, size_t out_size) {
@@ -96,19 +108,197 @@ bool RA_GetImage(const char *ra_image_path, char *out_path, size_t out_size) {
         return false;
     }
 
-    /* Most endpoints give a path like "/Images/067895.png", but some give the
-       absolute URL; take those as-is rather than prefixing the media host. */
     char url[768];
-    bool absolute = strncmp(ra_image_path, "http://", 7) == 0 ||
-                    strncmp(ra_image_path, "https://", 8) == 0;
-    int written = absolute
-        ? snprintf(url, sizeof(url), "%s", ra_image_path)
-        : snprintf(url, sizeof(url), "%s%s", RA_MEDIA_BASE_URL, ra_image_path);
-    if (written >= (int)sizeof(url)) {
+    if (!RA_ImageUrl(ra_image_path, url, sizeof(url))) {
         return false;
     }
 
     return RA_DownloadImage(url, out_path);
+}
+
+/* ── Concurrent, non-blocking downloads ───────────────────────────────────────
+   One curl multi handle driving up to RA_IMAGE_FETCH_MAX transfers. The caller
+   pumps it once per frame; curl_multi_perform advances whatever it can and
+   returns immediately, so no frame ever waits on the network. */
+
+typedef struct {
+    CURL *easy;
+    FILE *file;
+    char  dest_path[512];
+    char  part_path[520];
+    int   tag;
+    bool  in_use;
+} RA_ImageTransfer;
+
+struct RA_ImageFetcher {
+    CURLM *multi;
+    RA_ImageTransfer transfers[RA_IMAGE_FETCH_MAX];
+};
+
+RA_ImageFetcher *RA_ImageFetchCreate(void) {
+    RA_ImageFetcher *fetcher = calloc(1, sizeof(*fetcher));
+    if (!fetcher) {
+        return NULL;
+    }
+
+    fetcher->multi = curl_multi_init();
+    if (!fetcher->multi) {
+        free(fetcher);
+        return NULL;
+    }
+
+    return fetcher;
+}
+
+/* Detaches a transfer and closes its file. The partial download is kept only
+   when the transfer succeeded, so a cancelled one leaves nothing behind. */
+static void RA_ImageFetchRelease(RA_ImageFetcher *fetcher, RA_ImageTransfer *transfer,
+                                 bool succeeded) {
+    curl_multi_remove_handle(fetcher->multi, transfer->easy);
+    curl_easy_cleanup(transfer->easy);
+    fclose(transfer->file);
+
+    if (!succeeded || rename(transfer->part_path, transfer->dest_path) != 0) {
+        remove(transfer->part_path);
+    }
+
+    transfer->easy = NULL;
+    transfer->file = NULL;
+    transfer->in_use = false;
+}
+
+void RA_ImageFetchDestroy(RA_ImageFetcher *fetcher) {
+    if (!fetcher) {
+        return;
+    }
+
+    for (int i = 0; i < RA_IMAGE_FETCH_MAX; i++) {
+        if (fetcher->transfers[i].in_use) {
+            RA_ImageFetchRelease(fetcher, &fetcher->transfers[i], false);
+        }
+    }
+
+    curl_multi_cleanup(fetcher->multi);
+    free(fetcher);
+}
+
+bool RA_ImageFetchStart(RA_ImageFetcher *fetcher, const char *ra_image_path, int tag) {
+    if (!fetcher) {
+        return false;
+    }
+
+    RA_ImageTransfer *transfer = NULL;
+    for (int i = 0; i < RA_IMAGE_FETCH_MAX; i++) {
+        if (!fetcher->transfers[i].in_use) {
+            transfer = &fetcher->transfers[i];
+            break;
+        }
+    }
+    if (!transfer) {
+        return false; /* all slots busy — the caller retries next frame */
+    }
+
+    char url[768];
+    if (!RA_ImageCachePath(ra_image_path, transfer->dest_path, sizeof(transfer->dest_path)) ||
+        !RA_ImageUrl(ra_image_path, url, sizeof(url))) {
+        return false;
+    }
+
+    char dir[400];
+    if (!Paths_UserData(dir, sizeof(dir), "images") || !Paths_MakeDirs(dir)) {
+        return false;
+    }
+
+    if (snprintf(transfer->part_path, sizeof(transfer->part_path), "%s.part",
+                 transfer->dest_path) >= (int)sizeof(transfer->part_path)) {
+        return false;
+    }
+
+    transfer->file = fopen(transfer->part_path, "wb");
+    if (!transfer->file) {
+        return false;
+    }
+
+    transfer->easy = curl_easy_init();
+    if (!transfer->easy) {
+        fclose(transfer->file);
+        remove(transfer->part_path);
+        return false;
+    }
+
+    curl_easy_setopt(transfer->easy, CURLOPT_URL, url);
+    curl_easy_setopt(transfer->easy, CURLOPT_WRITEDATA, transfer->file);
+    curl_easy_setopt(transfer->easy, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(transfer->easy, CURLOPT_PRIVATE, transfer);
+    CURL_ApplyCommonOptions(transfer->easy);
+
+    if (curl_multi_add_handle(fetcher->multi, transfer->easy) != CURLM_OK) {
+        curl_easy_cleanup(transfer->easy);
+        fclose(transfer->file);
+        remove(transfer->part_path);
+        transfer->easy = NULL;
+        transfer->file = NULL;
+        return false;
+    }
+
+    transfer->tag = tag;
+    transfer->in_use = true;
+
+    return true;
+}
+
+/* Harvests whatever curl has finished since the last call. */
+static int RA_ImageFetchCollect(RA_ImageFetcher *fetcher, int *out_tags, int max_tags) {
+    int found = 0;
+    int queued = 0;
+    CURLMsg *msg;
+
+    while ((msg = curl_multi_info_read(fetcher->multi, &queued)) != NULL) {
+        if (msg->msg != CURLMSG_DONE) continue;
+
+        RA_ImageTransfer *transfer = NULL;
+        curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, (char **)&transfer);
+        if (!transfer) continue;
+
+        int tag = transfer->tag;
+        RA_ImageFetchRelease(fetcher, transfer, msg->data.result == CURLE_OK);
+
+        if (msg->data.result == CURLE_OK && found < max_tags) {
+            out_tags[found++] = tag;
+        }
+    }
+
+    return found;
+}
+
+int RA_ImageFetchPump(RA_ImageFetcher *fetcher, int *out_tags, int max_tags) {
+    if (!fetcher) {
+        return 0;
+    }
+
+    int running = 0;
+    curl_multi_perform(fetcher->multi, &running);
+
+    return RA_ImageFetchCollect(fetcher, out_tags, max_tags);
+}
+
+int RA_ImageFetchWait(RA_ImageFetcher *fetcher, int *out_tags, int max_tags) {
+    if (!fetcher) {
+        return 0;
+    }
+
+    int found = 0;
+    int running = 0;
+
+    do {
+        curl_multi_perform(fetcher->multi, &running);
+        found += RA_ImageFetchCollect(fetcher, out_tags + found, max_tags - found);
+
+        /* Sleep until there is something to do rather than spinning. */
+        if (running > 0) curl_multi_poll(fetcher->multi, NULL, 0, 100, NULL);
+    } while (running > 0 && found < max_tags);
+
+    return found;
 }
 
 /* Walks the cache directory once, accumulating sizes and optionally deleting.
