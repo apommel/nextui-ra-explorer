@@ -58,10 +58,16 @@ static bool RA_ImageCachePath(const char *ra_image_path, char *out_path, size_t 
         return false;
     }
 
-    /* "/Images/067895.png" -> "067895.png" */
-    const char *filename = strrchr(ra_image_path, '/');
-    filename = filename ? filename + 1 : ra_image_path;
-    if (!filename[0]) {
+    /* Absolute URLs arrive from the search endpoint; keep only the path. */
+    const char *path = ra_image_path;
+    const char *scheme = strstr(path, "://");
+    if (scheme) {
+        path = strchr(scheme + 3, '/');
+        if (!path) return false;
+    }
+
+    while (*path == '/') path++;
+    if (!*path) {
         return false;
     }
 
@@ -70,7 +76,18 @@ static bool RA_ImageCachePath(const char *ra_image_path, char *out_path, size_t 
         return false;
     }
 
-    return snprintf(out_path, out_size, "%s/%s", dir, filename) < (int)out_size;
+    int written = snprintf(out_path, out_size, "%s/%s", dir, path);
+    if (written < 0 || (size_t)written >= out_size) {
+        return false;
+    }
+
+    /* Fold the remote directories into the filename, leaving the cache dir
+       itself untouched. */
+    for (char *c = out_path + strlen(dir) + 1; *c; c++) {
+        if (*c == '/') *c = '_';
+    }
+
+    return true;
 }
 
 bool RA_GetCachedImage(const char *ra_image_path, char *out_path, size_t out_size) {
