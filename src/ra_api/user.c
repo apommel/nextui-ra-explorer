@@ -17,7 +17,7 @@ cJSON *RA_GetUserRecentAchievements(const char *user, int minutes) {
 
 cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count) {
     if (count < 1) count = 1;
-    if (count > RA_GAME_LIST_MAX) count = RA_GAME_LIST_MAX;
+    if (count > RA_LIST_MAX) count = RA_LIST_MAX;
     char count_str[8];
     snprintf(count_str, sizeof(count_str), "%d", count);
     RA_Param params[] = {

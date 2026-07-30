@@ -3,8 +3,9 @@
 
 #define RA_GAME_ID_LENGTH 16
 
-/* Rows fetched for a game list. Both sources cap at 50. */
-#define RA_GAME_LIST_MAX 50
+/* Rows shown in any list. Sources that support a server-side limit are
+   asked for this many; the rest are truncated on arrival. */
+#define RA_LIST_MAX 50
 
 #include "cjson/cJSON.h"
 

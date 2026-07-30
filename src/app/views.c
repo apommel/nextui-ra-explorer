@@ -539,10 +539,6 @@ void AchievementsListView(const char *game_title, cJSON *achievements) {
     free(entries);
 }
 
-/* How far back "recent" reaches. The endpoint's own default is 60 minutes,
-   which is too narrow to be useful as a browsable list. */
-#define RECENT_ACHIEVEMENTS_MINUTES (30 * 24 * 60)
-
 void SearchGamesView(void) {
     ap_keyboard_result query;
     /* NULL keeps the built-in key help, which documents Y to cancel — B is
@@ -554,7 +550,7 @@ void SearchGamesView(void) {
         return;
     }
 
-    cJSON *games = RA_SearchGames(query.text, RA_GAME_LIST_MAX);
+    cJSON *games = RA_SearchGames(query.text, RA_LIST_MAX);
     if (!games) {
         RequestFailedView("Search failed.");
         return;
@@ -591,6 +587,12 @@ void SearchGamesView(void) {
     cJSON_Delete(games);
 }
 
+/* How far back "recent" reaches. The endpoint defaults to 60 minutes, which is
+   narrow enough to come back empty for most players; six months is usually
+   enough to fill a screen. It has no server-side limit, so the response is
+   truncated to RA_LIST_MAX below. */
+#define RECENT_ACHIEVEMENTS_MINUTES (182 * 24 * 60)
+
 void RecentAchievementsView(void) {
     if (!RequireSettings()) return;
 
@@ -605,9 +607,12 @@ void RecentAchievementsView(void) {
     int count = cJSON_GetArraySize(json);
     if (count <= 0) {
         cJSON_Delete(json);
-        InfoView("No achievements unlocked recently.");
+        InfoView("No achievements unlocked in the past six months.");
         return;
     }
+
+    /* Most recent first, so truncating keeps the newest. */
+    if (count > RA_LIST_MAX) count = RA_LIST_MAX;
 
     AchievementListRow *rows = calloc((size_t)count, sizeof(*rows));
     if (!rows) {
@@ -620,6 +625,8 @@ void RecentAchievementsView(void) {
     cJSON *entry;
     int i = 0;
     cJSON_ArrayForEach(entry, json) {
+        if (i >= count) break;
+
         rows[i].achievement = AchievementFromRecent(entry);
 
         /* Unlocked by definition, so always the colour badge. BadgeURL is
@@ -874,7 +881,7 @@ void GameDetailView(int game_id) {
 void RecentGamesView(void) {
     if (!RequireSettings()) return;
 
-    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, RA_GAME_LIST_MAX);
+    cJSON *json = RA_GetUserRecentlyPlayedGames(Settings_Get()->username, RA_LIST_MAX);
     if (!json) {
         RequestFailedView("Could not load your games.");
         return;
