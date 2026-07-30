@@ -443,7 +443,7 @@ void SettingsView(void) {
 
     ap_footer_item footer[] = {
         { .button = AP_BTN_B, .label = "Cancel" },
-        { .button = AP_BTN_A, .label = "Edit" },
+        { .button = AP_BTN_A, .label = "Select" },
         { .button = AP_BTN_START, .label = "Save", .is_confirm = true },
     };
 
