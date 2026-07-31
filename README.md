@@ -62,27 +62,43 @@ task package                   # build all three, zip into dist/RA.Explorer.pakz
 The first device build also compiles curl and OpenSSL, which takes a bit
 longer. Later builds reuse them.
 
-## Installing
+## Installation
 
-`task adb` pushes to `/mnt/SDCARD/Tools/<platform>/`. To install by hand, copy
-`dist/<platform>/Tools/<platform>/RA Explorer.pak` to that directory on the SD
-card.
+### Via Pak Store (recommended)
 
-`task package` builds every platform and produces `dist/RA.Explorer.pakz`, the
-distribution format. It is a zip containing `Tools/<platform>/RA Explorer.pak`
-for all three devices, with paths relative to the card root, so extracting it to
-`/mnt/SDCARD` puts them in place.
+1. Open **Pak Store** on your NextUI device.
+2. Search for **RA Explorer** and install it.
+3. Pak Store downloads the latest `RA.Explorer.pakz` release and places the Pak
+   in the correct `Tools/<platform>/RA Explorer.pak/` directory for your device.
 
-On first run, open Settings and enter your RetroAchievements username and web
-API key, found on the RetroAchievements website under Settings > Applications.
-Saving verifies them against the site.
+### Manual installation
+
+1. Download `RA.Explorer.pakz` from the
+   [latest release](https://github.com/apommel/nextui-ra-explorer/releases).
+2. Extract the archive to the root of your SD card. It will create the correct
+   directory structure:
+
+   ```
+   Tools/
+   ├── my355/RA Explorer.pak/
+   ├── tg5040/RA Explorer.pak/
+   └── tg5050/RA Explorer.pak/
+   ```
+
+   Each `RA Explorer.pak/` folder contains `launch.sh`, `cacert.pem`,
+   `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, and the stripped `ra-explorer`
+   binary for that platform.
+
+### First run
+
+Open Settings and enter your RetroAchievements username and web API key, found
+on the RetroAchievements website under Settings > Applications. Saving verifies
+them against the site.
 
 Settings are stored in `settings.json` under `$SHARED_USERDATA_PATH/ra-explorer`
 on device, or `~/.userdata/ra-explorer` otherwise, and can be edited there
-directly.
-
-Downloaded icons are cached alongside it in `images/`. Settings shows how much
-space they use and can clear them.
+directly. Downloaded icons are cached alongside it in `images/`; Settings shows
+how much space they use and can clear them.
 
 ## Licence
 

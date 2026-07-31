@@ -1,0 +1,24 @@
+{
+  "name": "RA Explorer",
+  "version": "v1.0.0",
+  "type": "TOOL",
+  "description": "A RetroAchievements browser for NextUI handhelds.",
+  "author": "theadurn",
+  "repo_url": "https://github.com/apommel/nextui-ra-explorer",
+  "release_filename": "RA.Explorer.pakz",
+  "screenshots": [
+    "screenshots/main_menu.png",
+    "screenshots/achievements_list.png",
+    "screenshots/achievement_details.png",
+    "screenshots/game_list.png",
+    "screenshots/game_details.png"
+  ],
+  "platforms": [
+    "tg5040",
+    "tg5050",
+    "my355"
+  ],
+  "changelog": {
+    "v1.0.0": "Initial release."
+  }
+}
