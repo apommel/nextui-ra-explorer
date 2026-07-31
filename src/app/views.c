@@ -313,19 +313,28 @@ static void AchievementListView(const char *screen_title,
         };
     }
 
-    ap_footer_item footer[] = {
-        { .button = AP_BTN_B, .label = "Back" },
-        { .button = AP_BTN_A, .label = "Details", .is_confirm = true },
-    };
+    /* Only a cross-game list carries game ids, and then on every row; within
+       one game the jump would lead back where the user just came from. */
+    bool cross_game = count > 0 && rows[0].achievement.game_id > 0;
+
+    ap_footer_item footer[3];
+    int footer_count = 0;
+    footer[footer_count++] = (ap_footer_item){ .button = AP_BTN_B, .label = "Back" };
+    if (cross_game) {
+        footer[footer_count++] = (ap_footer_item){ .button = AP_BTN_Y, .label = "Game" };
+    }
+    footer[footer_count++] = (ap_footer_item){
+        .button = AP_BTN_A, .label = "Details", .is_confirm = true };
 
     IconLoader loader = { .slots = slots, .count = count };
 
     ap_list_opts opts = ap_list_default_opts(screen_title, items, count);
     opts.footer       = footer;
-    opts.footer_count = sizeof(footer) / sizeof(footer[0]);
+    opts.footer_count = footer_count;
+    if (cross_game) opts.secondary_action_button = AP_BTN_Y;
     IconLoader_Attach(&opts, &loader);
 
-    /* A opens one achievement and returns here; B leaves the list. */
+    /* A opens the achievement, Y its game; B leaves the list. */
     for (;;) {
         ap_list_result result;
         if (ap_list(&opts, &result) != AP_OK) break;
@@ -334,7 +343,12 @@ static void AchievementListView(const char *screen_title,
         opts.initial_index       = result.selected_index;
         opts.visible_start_index = result.visible_start_index;
 
-        AchievementDetailView(&rows[result.selected_index].achievement);
+        const Achievement *selected = &rows[result.selected_index].achievement;
+        if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
+            if (selected->game_id > 0) GameDetailView(selected->game_id);
+        } else if (result.action == AP_ACTION_SELECTED) {
+            AchievementDetailView(selected);
+        }
     }
 
     IconLoader_Release(&loader, items, count);
