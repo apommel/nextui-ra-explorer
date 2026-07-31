@@ -215,8 +215,9 @@ bool RA_ImageFetchStart(RA_ImageFetcher *fetcher, const char *ra_image_path, int
         return false; /* all slots busy — the caller retries next frame */
     }
 
+    char dest[sizeof(transfer->dest_path)];
     char url[768];
-    if (!RA_ImageCachePath(ra_image_path, transfer->dest_path, sizeof(transfer->dest_path)) ||
+    if (!RA_ImageCachePath(ra_image_path, dest, sizeof(dest)) ||
         !RA_ImageUrl(ra_image_path, url, sizeof(url))) {
         return false;
     }
@@ -226,10 +227,11 @@ bool RA_ImageFetchStart(RA_ImageFetcher *fetcher, const char *ra_image_path, int
         return false;
     }
 
-    if (snprintf(transfer->part_path, sizeof(transfer->part_path), "%s.part",
-                 transfer->dest_path) >= (int)sizeof(transfer->part_path)) {
+    if (snprintf(transfer->part_path, sizeof(transfer->part_path), "%s.part", dest)
+            >= (int)sizeof(transfer->part_path)) {
         return false;
     }
+    snprintf(transfer->dest_path, sizeof(transfer->dest_path), "%s", dest);
 
     transfer->file = fopen(transfer->part_path, "wb");
     if (!transfer->file) {

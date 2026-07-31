@@ -15,7 +15,8 @@ vars:
   DEVICE_BUILD_DIR: build/{{.PLATFORM}}
   BIN: ra-explorer
   PAK_NAME: RA Explorer.pak
-  PAK_DIR: dist/{{.PLATFORM}}/{{.PAK_NAME}}
+  PAK_DIR: 'dist/Tools/{{.PLATFORM}}/{{.PAK_NAME}}'
+  PAKZ_NAME: RA.Explorer.pakz
   IMAGE: ra-explorer-toolchain:{{.PLATFORM}}
   # Fetched cacert
   CACERT: build/cacert.pem
@@ -65,6 +66,7 @@ tasks:
     desc: Assemble the Pak for PLATFORM in dist/
     deps: [device, _cacert]
     cmds:
+      # Only this platform's folder, so the others in the tree survive.
       - rm -rf "{{.PAK_DIR}}"
       - mkdir -p "{{.PAK_DIR}}"
       - cp pak/launch.sh pak/THIRD-PARTY-NOTICES.txt LICENSE.txt "{{.PAK_DIR}}/"
@@ -76,6 +78,16 @@ tasks:
         vars:
           CMD: 'aarch64-nextui-linux-gnu-strip "{{.PAK_DIR}}/{{.BIN}}"'
       - 'echo "→ {{.PAK_DIR}}"'
+
+  package:
+    desc: Build every platform and zip them into one .pakz for distribution
+    cmds:
+      - task pak PLATFORM=my355
+      - task pak PLATFORM=tg5040
+      - task pak PLATFORM=tg5050
+      - rm -f "dist/{{.PAKZ_NAME}}"
+      - cd dist && zip -qr "{{.PAKZ_NAME}}" Tools
+      - 'echo "→ dist/{{.PAKZ_NAME}}"'
 
   adb:
     desc: Push the Pak for PLATFORM to a connected device over adb

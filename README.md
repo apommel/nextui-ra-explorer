@@ -54,22 +54,24 @@ Device builds run inside the NextUI toolchain container, selected by
 
 ```
 task device PLATFORM=tg5040    # cross-compile
-task pak PLATFORM=tg5040       # assemble dist/tg5040/RA Explorer.pak
-task adb PLATFORM=tg5040       # build, package and push over adb
+task pak PLATFORM=tg5040       # assemble the Pak
+task adb PLATFORM=tg5040       # build, assemble and push over adb
+task package                   # build all three, zip into dist/RA.Explorer.pakz
 ```
 
 The first device build also compiles curl and OpenSSL, which takes a bit
 longer. Later builds reuse them.
 
-`PLATFORM` is not only CPU tuning. Apostrophe compiles a different input path
-per device — the Miyoo Flip delivers every button as a keyboard scancode — so a
-binary built for the wrong platform misreads input. Each platform gets its own
-build and dist directory.
-
 ## Installing
 
 `task adb` pushes to `/mnt/SDCARD/Tools/<platform>/`. To install by hand, copy
-`dist/<platform>/RA Explorer.pak` to that directory on the SD card.
+`dist/<platform>/Tools/<platform>/RA Explorer.pak` to that directory on the SD
+card.
+
+`task package` builds every platform and produces `dist/RA.Explorer.pakz`, the
+distribution format. It is a zip containing `Tools/<platform>/RA Explorer.pak`
+for all three devices, with paths relative to the card root, so extracting it to
+`/mnt/SDCARD` puts them in place.
 
 On first run, open Settings and enter your RetroAchievements username and web
 API key, found on the RetroAchievements website under Settings > Applications.
@@ -92,9 +94,6 @@ a CA certificate bundle derived from Mozilla's root store. Their licences are
 reproduced in `THIRD-PARTY-NOTICES.txt`, which ships alongside. SDL2 and its
 companions are linked dynamically and supplied by the device, so they are not
 redistributed here.
-
-That file is maintained by hand: update it when a dependency is added, removed
-or has its licence change.
 
 ## Layout
 
