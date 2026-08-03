@@ -14,4 +14,13 @@ bool Paths_UserData(char *out_path, size_t out_size, const char *subdir);
 /* mkdir -p: creates every missing component of path. */
 bool Paths_MakeDirs(const char *path);
 
+/* Totals the regular files directly inside dir. Either out parameter may be
+   NULL, and a missing directory counts as empty. Returns false only if the
+   directory exists but cannot be read. */
+bool Paths_DirUsage(const char *dir, unsigned long long *out_bytes, int *out_files);
+
+/* Deletes every regular file directly inside dir, keeping the directory.
+   Returns false if any of them could not be removed. */
+bool Paths_ClearDir(const char *dir);
+
 #endif /* PATHS_H */

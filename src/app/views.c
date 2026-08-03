@@ -10,6 +10,7 @@
 #include "app/icon_loader.h"
 #include "app/settings.h"
 #include "app/views.h"
+#include "ra_api/response_cache.h"
 #include "ra_api/images.h"
 #include "ra_api/ra_api.h"
 
@@ -113,12 +114,13 @@ static void FormatSnakeCase(const char *value, char *out, size_t out_size) {
     out[i] = '\0';
 }
 
-/* "12.3 MB (418)", or "empty". */
-static void FormatCacheUsage(char *out, size_t out_size) {
+/* "12.3 MB (418)", or "empty", for whichever cache `usage` reports on. */
+static void FormatCacheUsage(char *out, size_t out_size,
+                             bool (*usage)(unsigned long long *, int *)) {
     unsigned long long bytes = 0;
     int files = 0;
 
-    if (!RA_GetImageCacheUsage(&bytes, &files)) {
+    if (!usage(&bytes, &files)) {
         snprintf(out, out_size, "unknown");
     } else if (files == 0) {
         snprintf(out, out_size, "empty");
@@ -169,7 +171,7 @@ static void RequestFailedView(const char *what) {
         reason = "Invalid API key. Check it in Settings.";
         break;
     case RA_ERROR_NETWORK:
-        reason = "Could not reach RetroAchievements. Check the network connection.";
+        reason = "Could not reach RetroAchievements. No cached response.";
         break;
     default:
         reason = "RetroAchievements returned an unexpected response.";
@@ -181,6 +183,62 @@ static void RequestFailedView(const char *what) {
     InfoView(message);
 }
 
+/* Room for a game title plus the marker appended to it below. */
+#define SCREEN_TITLE_MAX 160
+
+/* Whether the app has already said it is offline since the last time a
+   request actually reached RetroAchievements. */
+static bool g_offline_warned = false;
+
+/* Announces working from cached data, once per disconnection. */
+static void WarnIfOffline(void) {
+    switch (RA_LastResponseSource()) {
+    case RA_SOURCE_NETWORK:
+        /* Only reaching the server proves the connection is back. */
+        g_offline_warned = false;
+        return;
+
+    case RA_SOURCE_CACHE:
+        /* Ordinary cache hit during a healthy session: nothing to say. */
+        return;
+
+    case RA_SOURCE_CACHE_OFFLINE:
+        break;
+    }
+
+    if (g_offline_warned) return;
+    g_offline_warned = true;
+
+    InfoView("No connection. Showing what was saved last time — each screen "
+             "shows how old its data is.");
+}
+
+/* "5m", "2h", "3d": how far behind the data on screen is. */
+static void FormatDataAge(int seconds, char *out, size_t out_size) {
+    if (seconds >= 24 * 60 * 60) {
+        snprintf(out, out_size, "%dd", seconds / (24 * 60 * 60));
+    } else if (seconds >= 60 * 60) {
+        snprintf(out, out_size, "%dh", seconds / (60 * 60));
+    } else if (seconds >= 60) {
+        snprintf(out, out_size, "%dm", seconds / 60);
+    } else {
+        snprintf(out, out_size, "<1m");
+    }
+}
+
+/* Copies a screen title, marking it when the data behind it came from the
+   cache because the network was unreachable. */
+static void TitleWithDataAge(char *out, size_t out_size, const char *title) {
+    if (RA_LastResponseSource() != RA_SOURCE_CACHE_OFFLINE) {
+        snprintf(out, out_size, "%s", title);
+        return;
+    }
+
+    char age[16];
+    FormatDataAge(RA_LastResponseAgeSeconds(), age, sizeof(age));
+    snprintf(out, out_size, "%s (%s old)", title, age);
+}
+
 /* Confirms the credentials and captures the account's stable id, which is the
    only way to get it: no endpoint reports who the API key belongs to, so the
    username has to be resolved once.
@@ -189,7 +247,7 @@ static void RequestFailedView(const char *what) {
    leaves them untouched and returns false. Reporting is left to the caller, so
    it can be said after the save it does not prevent. */
 static bool ResolveUser(Settings *settings) {
-    cJSON *json = RA_GetUserProfile(settings->username);
+    cJSON *json = RA_VerifyUserProfile(settings->username);
 
     const char *canonical = json ? GetStringOrNull(json, "User") : NULL;
     const char *ulid = json ? GetStringOrNull(json, "ULID") : NULL;
@@ -371,7 +429,11 @@ static void OpenGameAchievements(int game_id) {
         return;
     }
 
-    AchievementsListView(cJSON_GetStringValue(title),
+    char screen_title[SCREEN_TITLE_MAX];
+    TitleWithDataAge(screen_title, sizeof(screen_title), cJSON_GetStringValue(title));
+    WarnIfOffline();
+
+    AchievementsListView(screen_title,
                          cJSON_GetObjectItemCaseSensitive(json, "Achievements"),
                          GetIntValue(json, "NumDistinctPlayers"));
     cJSON_Delete(json);
@@ -461,12 +523,19 @@ void SettingsView(void) {
     };
 
     char cache_usage[48];
-    FormatCacheUsage(cache_usage, sizeof(cache_usage));
+    FormatCacheUsage(cache_usage, sizeof(cache_usage), RA_GetImageCacheUsage);
     ap_option cache_option[] = {
         { .label = cache_usage, .value = cache_usage },
     };
 
-    enum { ROW_USERNAME, ROW_API_KEY, ROW_UNLOCKED_FIRST, ROW_CLEAR_CACHE };
+    char response_cache_usage[48];
+    FormatCacheUsage(response_cache_usage, sizeof(response_cache_usage),
+                             RA_GetResponseCacheUsage);
+    ap_option response_cache_option[] = {
+        { .label = response_cache_usage, .value = response_cache_usage },
+    };
+
+    enum { ROW_USERNAME, ROW_API_KEY, ROW_UNLOCKED_FIRST, ROW_CLEAR_CACHE, ROW_CLEAR_RESPONSE_CACHE };
 
     ap_options_item items[] = {
         [ROW_USERNAME] = { .label = "Username", .type = AP_OPT_KEYBOARD,
@@ -479,6 +548,8 @@ void SettingsView(void) {
           .selected_option = settings->unlocked_first ? 0 : 1 },
         [ROW_CLEAR_CACHE] = { .label = "Clear Image Cache", .type = AP_OPT_CLICKABLE,
           .options = cache_option, .option_count = 1, .selected_option = 0 },
+        [ROW_CLEAR_RESPONSE_CACHE] = { .label = "Clear Data Cache", .type = AP_OPT_CLICKABLE,
+          .options = response_cache_option, .option_count = 1, .selected_option = 0 },
     };
 
     ap_footer_item footer[] = {
@@ -505,7 +576,19 @@ void SettingsView(void) {
             if (!RA_ClearImageCache()) {
                 InfoView("Some cached images could not be deleted.");
             }
-            FormatCacheUsage(cache_usage, sizeof(cache_usage));
+            FormatCacheUsage(cache_usage, sizeof(cache_usage), RA_GetImageCacheUsage);
+
+            opts.initial_selected_index = result.focused_index;
+            opts.visible_start_index    = result.visible_start_index;
+            continue;
+        }
+
+        if (result.action == AP_ACTION_SELECTED && result.focused_index == ROW_CLEAR_RESPONSE_CACHE) {
+            if (!RA_ClearResponseCache()) {
+                InfoView("Some cached responses could not be deleted.");
+            }
+            FormatCacheUsage(response_cache_usage, sizeof(response_cache_usage),
+                             RA_GetResponseCacheUsage);
 
             opts.initial_selected_index = result.focused_index;
             opts.visible_start_index    = result.visible_start_index;
@@ -524,6 +607,12 @@ void SettingsView(void) {
                 strcmp(updated.api_key, settings->api_key) != 0;
             if (credentials_changed) {
                 updated.ulid[0] = '\0';
+            }
+
+            /* Clear old cache when switching account. Not credentials_changed:
+               a new key for the same user leaves the data it fetched valid. */
+            if (strcmp(updated.username, settings->username) != 0) {
+                RA_ClearResponseCache();
             }
 
             /* Set first: resolving issues a request, which needs the new key.
@@ -616,6 +705,10 @@ void ProfileView(void) {
         return;
     }
 
+    char screen_title[SCREEN_TITLE_MAX];
+    TitleWithDataAge(screen_title, sizeof(screen_title), cJSON_GetStringValue(user));
+    WarnIfOffline();
+
     char avatar[512];
     bool has_avatar = RA_GetImage(GetStringOrNull(json, "UserPic"),
                                   avatar, sizeof(avatar));
@@ -681,7 +774,7 @@ void ProfileView(void) {
     };
 
     ap_detail_opts opts = {
-        .title = cJSON_GetStringValue(user),
+        .title = screen_title,
         .sections = sections,
         .section_count = section_count,
         .footer = footer,
@@ -764,6 +857,10 @@ void RecentAchievementsView(void) {
         return;
     }
 
+    char screen_title[SCREEN_TITLE_MAX];
+    TitleWithDataAge(screen_title, sizeof(screen_title), "Recent Achievements");
+    WarnIfOffline();
+
     /* An empty array is a valid answer here, unlike a failed request. */
     int count = cJSON_GetArraySize(json);
     if (count <= 0) {
@@ -802,7 +899,7 @@ void RecentAchievementsView(void) {
         i++;
     }
 
-    AchievementListView("Recent Achievements", rows, count);
+    AchievementListView(screen_title, rows, count);
 
     free(rows);
     cJSON_Delete(json);
@@ -934,6 +1031,10 @@ void GameDetailView(int game_id) {
         return;
     }
 
+    char screen_title[SCREEN_TITLE_MAX];
+    TitleWithDataAge(screen_title, sizeof(screen_title), cJSON_GetStringValue(title));
+    WarnIfOffline();
+
     /* Released is "2004-11-18", or "1992-06-02 00:00:00" on older records;
        either way keep just the date part. */
     char released[11];
@@ -1023,7 +1124,7 @@ void GameDetailView(int game_id) {
     };
 
     ap_detail_opts opts = {
-        .title = cJSON_GetStringValue(title),
+        .title = screen_title,
         .sections = sections,
         .section_count = section_count,
         .footer = footer,
@@ -1041,7 +1142,7 @@ void GameDetailView(int game_id) {
         if (result.action == AP_DETAIL_ACTION) continue;
         if (result.action != AP_DETAIL_SECONDARY_ACTION) break;
 
-        AchievementsListView(cJSON_GetStringValue(title),
+        AchievementsListView(screen_title,
                              cJSON_GetObjectItemCaseSensitive(json, "Achievements"),
                              GetIntValue(json, "NumDistinctPlayers"));
     }
@@ -1057,6 +1158,10 @@ void RecentGamesView(void) {
         RequestFailedView("Could not load your games.");
         return;
     }
+
+    char screen_title[SCREEN_TITLE_MAX];
+    TitleWithDataAge(screen_title, sizeof(screen_title), "Recently Played Games");
+    WarnIfOffline();
 
     /* An empty list is a valid answer, unlike a failed request. */
     int count = cJSON_GetArraySize(json);
@@ -1082,7 +1187,7 @@ void RecentGamesView(void) {
         };
     }
 
-    GameListView("Recently Played Games", rows, count);
+    GameListView(screen_title, rows, count);
 
     free(rows);
     cJSON_Delete(json);

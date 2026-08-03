@@ -4,12 +4,28 @@
 #include "ra_api_internal.h"
 #include "ra_api.h"
 
+/* How long a cached response is served without touching the network, per
+   endpoint by how quickly its data changes. Past its TTL an entry is still
+   served if a live request then fails for lack of a connection. */
+#define RA_PROFILE_CACHE_TTL_SECONDS (60 * 60)              /* stats barely move */
+#define RA_RECENT_ACHIEVEMENTS_CACHE_TTL_SECONDS (5 * 60)   /* about what is new */
+#define RA_RECENTLY_PLAYED_CACHE_TTL_SECONDS (5 * 60)       /* same */
+#define RA_GAME_PROGRESS_CACHE_TTL_SECONDS (15 * 60)        /* static metadata plus progress */
+
 cJSON *RA_GetUserProfile(const char *user) {
     RA_Param params[] = {
         { "u", user },
     };
-    cJSON *json = RA_GetRequest("GetUserProfile", params, 1);
-    return json;
+    return RA_GetRequest("GetUserProfile", params, 1, RA_PROFILE_CACHE_TTL_SECONDS);
+}
+
+cJSON *RA_VerifyUserProfile(const char *user) {
+    RA_Param params[] = {
+        { "u", user },
+    };
+    /* Uncached: a copy saved under the previous key would confirm a key that
+       no longer applies. */
+    return RA_GetRequest("GetUserProfile", params, 1, RA_CACHE_BYPASS);
 }
 
 cJSON *RA_GetUserRecentAchievements(const char *user, int minutes) {
@@ -19,8 +35,8 @@ cJSON *RA_GetUserRecentAchievements(const char *user, int minutes) {
         { "u", user },
         { "m", minutes_str },
     };
-    cJSON *json = RA_GetRequest("GetUserRecentAchievements", params, 2);
-    return json;
+    return RA_GetRequest("GetUserRecentAchievements", params, 2,
+                         RA_RECENT_ACHIEVEMENTS_CACHE_TTL_SECONDS);
 }
 
 cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count) {
@@ -32,8 +48,8 @@ cJSON *RA_GetUserRecentlyPlayedGames(const char *user, int count) {
         { "u", user },
         { "c", count_str },
     };
-    cJSON *json = RA_GetRequest("GetUserRecentlyPlayedGames", params, 2);
-    return json;
+    return RA_GetRequest("GetUserRecentlyPlayedGames", params, 2,
+                         RA_RECENTLY_PLAYED_CACHE_TTL_SECONDS);
 }
 
 cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id) {
@@ -44,7 +60,7 @@ cJSON *RA_GetGameInfoAndUserProgress(const char *user, int game_id) {
         { "g", game_id_str },
         { "a", "1" },
     };
-    cJSON *json = RA_GetRequest("GetGameInfoAndUserProgress", params,
-                                sizeof(params) / sizeof(params[0]));
-    return json;
+    return RA_GetRequest("GetGameInfoAndUserProgress", params,
+                         sizeof(params) / sizeof(params[0]),
+                         RA_GAME_PROGRESS_CACHE_TTL_SECONDS);
 }

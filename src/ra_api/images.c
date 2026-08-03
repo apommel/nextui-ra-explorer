@@ -1,9 +1,6 @@
-#include <dirent.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <curl/curl.h>
@@ -119,6 +116,10 @@ bool RA_GetImage(const char *ra_image_path, char *out_path, size_t out_size) {
 
     if (access(out_path, F_OK) == 0) {
         return true; /* already cached */
+    }
+
+    if (!RA_HasNetworkLink()) {
+        return false;
     }
 
     if (!Paths_MakeDirs(dir)) {
@@ -320,52 +321,20 @@ int RA_ImageFetchWait(RA_ImageFetcher *fetcher, int *out_tags, int max_tags) {
     return found;
 }
 
-/* Walks the cache directory once, accumulating sizes and optionally deleting.
-   A few hundred small files, so a single pass is cheap enough to run on open. */
-static bool RA_WalkImageCache(unsigned long long *out_bytes, int *out_files, bool remove_files) {
-    if (out_bytes) *out_bytes = 0;
-    if (out_files) *out_files = 0;
-
+bool RA_GetImageCacheUsage(unsigned long long *out_bytes, int *out_files) {
     char dir[400];
     if (!Paths_UserData(dir, sizeof(dir), "images")) {
         return false;
     }
 
-    DIR *handle = opendir(dir);
-    if (!handle) {
-        return errno == ENOENT; /* nothing cached yet is a valid empty cache */
-    }
-
-    bool ok = true;
-    struct dirent *entry;
-    while ((entry = readdir(handle)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-
-        char path[512];
-        if (snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name) >= (int)sizeof(path)) {
-            ok = false;
-            continue;
-        }
-
-        struct stat info;
-        if (stat(path, &info) != 0 || !S_ISREG(info.st_mode)) continue;
-
-        if (remove_files) {
-            if (unlink(path) != 0) ok = false;
-        } else {
-            if (out_bytes) *out_bytes += (unsigned long long)info.st_size;
-            if (out_files) (*out_files)++;
-        }
-    }
-
-    closedir(handle);
-    return ok;
-}
-
-bool RA_GetImageCacheUsage(unsigned long long *out_bytes, int *out_files) {
-    return RA_WalkImageCache(out_bytes, out_files, false);
+    return Paths_DirUsage(dir, out_bytes, out_files);
 }
 
 bool RA_ClearImageCache(void) {
-    return RA_WalkImageCache(NULL, NULL, true);
+    char dir[400];
+    if (!Paths_UserData(dir, sizeof(dir), "images")) {
+        return false;
+    }
+
+    return Paths_ClearDir(dir);
 }

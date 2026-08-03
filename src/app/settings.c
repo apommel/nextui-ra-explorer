@@ -4,6 +4,7 @@
 
 #include "cjson/cJSON.h"
 
+#include "util/file.h"
 #include "util/paths.h"
 #include "app/settings.h"
 
@@ -44,30 +45,10 @@ bool Settings_Load(void) {
         return false;
     }
 
-    FILE *file = fopen(path, "rb");
-    if (!file) {
+    char *text = File_ReadAll(path);
+    if (!text) {
         return false; /* no settings yet — first run */
     }
-
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return false;
-    }
-    long size = ftell(file);
-    if (size <= 0 || fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return false;
-    }
-
-    char *text = malloc((size_t)size + 1);
-    if (!text) {
-        fclose(file);
-        return false;
-    }
-
-    size_t read = fread(text, 1, (size_t)size, file);
-    fclose(file);
-    text[read] = '\0';
 
     cJSON *json = cJSON_Parse(text);
     free(text);
