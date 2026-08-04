@@ -1,7 +1,7 @@
 #define RA_API_BASE_URL "https://retroachievements.org/API/API_"
 #define RA_INTERNAL_BASE_URL "https://retroachievements.org/internal-api/"
 #define RA_API_URL_MAX 1024
-#define RA_USER_AGENT "nextui-ra-explorer/1.0"
+#define RA_USER_AGENT "nextui-ra-explorer/1.1.0"
 
 #define RA_CONNECT_TIMEOUT_SECONDS 5L
 

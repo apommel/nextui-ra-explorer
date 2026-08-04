@@ -1,6 +1,6 @@
 {
   "name": "RA Explorer",
-  "version": "v1.0.0",
+  "version": "v1.1.0",
   "type": "TOOL",
   "description": "A RetroAchievements browser for NextUI handhelds.",
   "author": "theadurn",
@@ -19,6 +19,7 @@
     "my355"
   ],
   "changelog": {
+    "v1.1.0": "Add request caching to improve speed and to allow offline usage.",
     "v1.0.0": "Initial release."
   }
 }
