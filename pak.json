@@ -1,11 +1,11 @@
 {
   "name": "RA Explorer",
-  "version": "v1.1.0",
+  "version": "v1.2.0",
   "type": "TOOL",
   "description": "A RetroAchievements browser for NextUI handhelds.",
   "author": "theadurn",
   "repo_url": "https://github.com/apommel/nextui-ra-explorer",
-  "release_filename": "RA.Explorer.pakz",
+  "release_filename": "RA.Explorer.pak.zip",
   "screenshots": [
     "screenshots/main_menu.png",
     "screenshots/achievements_list.png",
@@ -16,9 +16,11 @@
   "platforms": [
     "tg5040",
     "tg5050",
-    "my355"
+    "my355",
+    "h700"
   ],
   "changelog": {
+    "v1.2.0": "Adds Anbernic H700 support. One RA.Explorer.pak.zip now installs on every platform, with an universal binary.",
     "v1.1.0": "Add request caching to improve speed and to allow offline usage.",
     "v1.0.0": "Initial release."
   }
