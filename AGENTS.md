@@ -19,39 +19,55 @@ an existing one may have been configured before an option changed.
 Do not claim anything works on hardware. Nothing here has been verified beyond
 compiling and, for the API layer, running against the live service.
 
-## Platform builds
+## Device builds
 
-`PLATFORM` selects far more than CPU tuning. Apostrophe branches on
-`PLATFORM_MY355` in about twenty places, including its entire input mapping:
-the Miyoo Flip delivers every button as an SDL keyboard scancode, so a binary
-built for another platform misreads all input. There is no runtime override.
+There is one device build. Since Apostrophe v1.2.0 the platform is resolved at
+runtime — `ap_get_platform()` reads the launcher's `PLATFORM`, falling back to
+the basename of `SYSTEM_PATH` — so `-DPLATFORM_NEXTUI` is the only platform
+define and the resulting binary runs on tg5040, tg5050, my355 and h700. Nothing
+selects a device at compile time any more; do not reintroduce a `PLATFORM_*`
+define or a per-platform cross file.
 
-The three toolchain images differ in their sysroots:
-
-| | tg5040 | my355 |
-|---|---|---|
-| SDL2 | 2.26.1 | 2.33.0 |
-| SDL2_ttf / SDL2_image `.pc` | absent | present |
-| OpenSSL | 1.1.0i | 3.4.1 |
+The build uses the tg5040 toolchain image **pinned by digest** in
+`docker/Dockerfile`, the same digest Apostrophe pins for `make universal`. One
+image now compiles the binary that ships to every handheld, so its ABI baseline
+(`-mcpu=cortex-a53`, glibc, SDL2 2.26.1) has to stay fixed. Moving to a tag
+would let a sysroot bump silently raise the floor under devices that cannot
+meet it.
 
 Consequences worth knowing:
 
-- `cross/pkgconfig/*.pc` exist only because tg5040 and tg5050 ship those
-  libraries without pkg-config files. `PKG_CONFIG_PATH` puts the sysroot first
-  so my355 uses its own. Do not reorder it.
+- `cross/pkgconfig` comes **first** in `PKG_CONFIG_PATH`, ahead of the sysroot.
+  `SDL2_ttf.pc` and `SDL2_image.pc` are there because the sysroot has neither.
+  `sdl2.pc` is there to override one that exists: the sysroot's puts
+  `-Wl,-rpath,/usr/lib` in `Libs`, and a binary that has to load whichever SDL2
+  the firmware supplies must carry no runtime search path of its own. Check
+  with `readelf -d` that the binary has no `RPATH` or `RUNPATH`.
+- `-mcpu=cortex-a53` is correct even though tg5050 and my355 are A55. It is not
+  just the ISA floor: GCC 8.3 maps `-mtune=cortex-a55` onto the A53 scheduler and
+  cost model, so tuning for A55 emits byte-identical code. Nothing is lost, and
+  `-mtune=generic` would only replace an exact model with a compromise.
 - `--force-fallback-for=openssl` in the `device` task is load-bearing. Without
-  it Meson silently prefers the sysroot OpenSSL — 1.1.0i on tg5040, which is
-  end-of-life — and links it dynamically, so the binary then depends on a
-  library the device may not have.
+  it Meson silently prefers the sysroot OpenSSL — 1.1.0i, which is end-of-life
+  — and links it dynamically, so the binary then depends on a library the
+  device may not have.
 - The device compiler is GCC 8.3 with `-Wextra -Werror`. It catches things
   Apple clang does not, `-Wformat-truncation` in particular. A native build
   passing proves little.
 
-Other build facts: the toolchain images have Ninja but not Meson, which
+Other build facts: the toolchain image has Ninja but not Meson, which
 `docker/Dockerfile` adds; `libm` must be linked explicitly because it is
 separate from libc on Linux; and `AP_S()` cannot be used outside `main.c`
 because it dereferences a global that only exists in the translation unit
 defining `AP_IMPLEMENTATION` — call `ap_scale()` instead.
+
+## Packaging
+
+`task package` produces one `dist/RA.Explorer.pak.zip` whose **contents sit at
+the archive root**, not under a `RA Explorer.pak/` folder and not under
+`Tools/`. NextUI creates the directory itself, under whichever platform it is
+running, which is what makes a single archive installable everywhere. Zipping
+the folder instead would nest it one level too deep on install.
 
 ## Apostrophe constraints
 

@@ -1,30 +1,31 @@
 version: '3'
 
-# Native builds use the system SDL2 and curl. Device builds cross-compile for
-# aarch64 inside the toolchain container, statically linking curl and OpenSSL
-# because the sysroot has neither libcurl nor a current OpenSSL.
+# Native builds use the system SDL2 and curl. The device build cross-compiles
+# one aarch64 binary for every NextUI handheld, statically linking curl and
+# OpenSSL because the sysroot has neither libcurl nor a current OpenSSL.
 #
-# PLATFORM selects the device: my355 (Miyoo Flip), tg5040 (TrimUI Brick /
-# Smart Pro) or tg5050 (Smart Pro S). 
+# Apostrophe resolves the platform at runtime, so there is nothing to select at
+# build time: the same binary runs on tg5040, tg5050, my355 and h700. PLATFORM
+# survives only in `task adb`, which has to know which Tools directory on the
+# SD card to push to.
 #
 # Typical device round-trip:  task adb PLATFORM=my355
 
 vars:
-  PLATFORM: '{{.PLATFORM | default "my355"}}'
   NATIVE_BUILD_DIR: build/native
-  DEVICE_BUILD_DIR: build/{{.PLATFORM}}
+  DEVICE_BUILD_DIR: build/device
   BIN: ra-explorer
   PAK_NAME: RA Explorer.pak
-  PAK_DIR: 'dist/Tools/{{.PLATFORM}}/{{.PAK_NAME}}'
-  PAKZ_NAME: RA.Explorer.pakz
-  IMAGE: ra-explorer-toolchain:{{.PLATFORM}}
+  PAK_DIR: 'dist/{{.PAK_NAME}}'
+  ZIP_NAME: RA.Explorer.pak.zip
+  IMAGE: ra-explorer-toolchain
   # Fetched cacert
   CACERT: build/cacert.pem
   CACERT_URL: https://curl.se/ca/cacert.pem
-  # Sysroot first: my355 ships real SDL2_ttf/SDL2_image .pc files, and only
-  # tg5040/tg5050 need our stand-ins.
+  # Ours first: it overrides the sysroot's sdl2.pc to drop its rpath, and
+  # supplies the SDL2_ttf/SDL2_image files the sysroot lacks entirely.
   DEVICE_PKG_CONFIG_PATH: >-
-    /opt/aarch64-nextui-linux-gnu/aarch64-nextui-linux-gnu/libc/usr/lib/pkgconfig:/workspace/cross/pkgconfig
+    /workspace/cross/pkgconfig:/opt/aarch64-nextui-linux-gnu/aarch64-nextui-linux-gnu/libc/usr/lib/pkgconfig
 
 tasks:
   default:
@@ -47,7 +48,7 @@ tasks:
       - cd {{.NATIVE_BUILD_DIR}} && ./{{.BIN}}
 
   device:
-    desc: Cross-compile for PLATFORM (first run also builds curl and OpenSSL)
+    desc: Cross-compile the one binary every handheld runs
     deps: [_image]
     cmds:
       - task: _docker
@@ -55,18 +56,16 @@ tasks:
           CMD: >-
             sh -c '[ -f {{.DEVICE_BUILD_DIR}}/build.ninja ] ||
             meson setup {{.DEVICE_BUILD_DIR}}
-            --cross-file cross/nextui-arm64.ini
-            --cross-file cross/{{.PLATFORM}}.ini
+            --cross-file cross/nextui.ini
             --buildtype release --default-library=static
             --force-fallback-for=openssl'
       - task: _docker
         vars: {CMD: 'meson compile -C {{.DEVICE_BUILD_DIR}}'}
 
   pak:
-    desc: Assemble the Pak for PLATFORM in dist/
+    desc: Assemble the Pak in dist/
     deps: [device, _cacert]
     cmds:
-      # Only this platform's folder, so the others in the tree survive.
       - rm -rf "{{.PAK_DIR}}"
       - mkdir -p "{{.PAK_DIR}}"
       - cp pak/launch.sh pak/THIRD-PARTY-NOTICES.txt LICENSE.txt "{{.PAK_DIR}}/"
@@ -80,19 +79,21 @@ tasks:
       - 'echo "→ {{.PAK_DIR}}"'
 
   package:
-    desc: Build every platform and zip them into one .pakz for distribution
+    desc: Zip the Pak into the single archive published for every platform
+    deps: [pak]
     cmds:
-      - task pak PLATFORM=my355
-      - task pak PLATFORM=tg5040
-      - task pak PLATFORM=tg5050
-      - rm -f "dist/{{.PAKZ_NAME}}"
-      - cd dist && zip -qr "{{.PAKZ_NAME}}" Tools
-      - 'echo "→ dist/{{.PAKZ_NAME}}"'
+      # The Pak's contents sit at the root of the archive, not the .pak folder:
+      # NextUI creates the directory itself, under the platform it is running.
+      - rm -f "dist/{{.ZIP_NAME}}"
+      - root=$PWD; cd "{{.PAK_DIR}}" && zip -qr9 "$root/dist/{{.ZIP_NAME}}" . -x '.*'
+      - unzip -Z1 "dist/{{.ZIP_NAME}}" | grep -qx "{{.BIN}}"
+      - 'echo "→ dist/{{.ZIP_NAME}}"'
 
   adb:
-    desc: Push the Pak for PLATFORM to a connected device over adb
+    desc: Push the Pak to a connected device over adb (PLATFORM picks the folder)
     deps: [pak]
     vars:
+      PLATFORM: '{{.PLATFORM | default "my355"}}'
       TOOLS: /mnt/SDCARD/Tools/{{.PLATFORM}}
     cmds:
       # The remote paths contain a space, so they are quoted for the device
@@ -122,12 +123,11 @@ tasks:
 
   _image:
     internal: true
-    # Built once per platform. Remove the image to pick up Dockerfile changes.
+    # Remove the image to pick up Dockerfile changes.
     status:
       - docker image inspect {{.IMAGE}} >/dev/null 2>&1
     cmds:
-      - docker build -q --build-arg TOOLCHAIN=ghcr.io/loveretro/{{.PLATFORM}}-toolchain:latest
-        -t {{.IMAGE}} docker
+      - docker build -q -t {{.IMAGE}} docker
 
   _docker:
     internal: true

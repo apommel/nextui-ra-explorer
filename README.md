@@ -48,16 +48,21 @@ task build     # native, for development
 task run       # native, and launch it
 ```
 
-Device builds run inside the NextUI toolchain container, selected by
-`PLATFORM` — `my355` (Miyoo Flip), `tg5040` (TrimUI Brick / Smart Pro) or
-`tg5050` (Smart Pro S). It defaults to `my355`.
+The device build runs inside the NextUI toolchain container and produces a
+single binary for every handheld — `tg5040` (TrimUI Brick / Smart Pro),
+`tg5050` (Smart Pro S), `my355` (Miyoo Flip) and `h700` (Anbernic). Apostrophe
+reads the launcher's `PLATFORM` at runtime, so there is nothing to pick at
+build time.
 
 ```
-task device PLATFORM=tg5040    # cross-compile
-task pak PLATFORM=tg5040       # assemble the Pak
+task device                    # cross-compile
+task pak                       # assemble the Pak in dist/
+task package                   # zip it into dist/RA.Explorer.pak.zip
 task adb PLATFORM=tg5040       # build, assemble and push over adb
-task package                   # build all three, zip into dist/RA.Explorer.pakz
 ```
+
+`PLATFORM` survives only in `task adb`, which has to know which `Tools/`
+directory on the SD card to push to; it defaults to `my355`.
 
 The first device build also compiles curl and OpenSSL, which takes a bit
 longer. Later builds reuse them.
@@ -68,26 +73,28 @@ longer. Later builds reuse them.
 
 1. Open **Pak Store** on your NextUI device.
 2. Search for **RA Explorer** and install it.
-3. Pak Store downloads the latest `RA.Explorer.pakz` release and places the Pak
-   in the correct `Tools/<platform>/RA Explorer.pak/` directory for your device.
+3. Pak Store downloads the latest `RA.Explorer.pak.zip` release and unpacks it
+   into the `Tools/<platform>/RA Explorer.pak/` directory for your device.
 
 ### Manual installation
 
-1. Download `RA.Explorer.pakz` from the
+1. Download `RA.Explorer.pak.zip` from the
    [latest release](https://github.com/apommel/nextui-ra-explorer/releases).
-2. Extract the archive to the root of your SD card. It will create the correct
-   directory structure:
+2. Create `Tools/<platform>/RA Explorer.pak/` on your SD card, where
+   `<platform>` is `tg5040`, `tg5050`, `my355` or `h700`, and extract the
+   archive's contents into it:
 
    ```
-   Tools/
-   ├── my355/RA Explorer.pak/
-   ├── tg5040/RA Explorer.pak/
-   └── tg5050/RA Explorer.pak/
+   Tools/tg5040/RA Explorer.pak/
+   ├── launch.sh
+   ├── ra-explorer
+   ├── cacert.pem
+   ├── LICENSE.txt
+   └── THIRD-PARTY-NOTICES.txt
    ```
 
-   Each `RA Explorer.pak/` folder contains `launch.sh`, `cacert.pem`,
-   `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, and the stripped `ra-explorer`
-   binary for that platform.
+   The archive is the same for every handheld: `ra-explorer` picks its platform
+   at runtime.
 
 ### First run
 
@@ -117,7 +124,7 @@ redistributed here.
 src/app/      screens, settings, lazy list icons
 src/ra_api/   RetroAchievements HTTP client, endpoints, image cache
 src/util/     paths
-cross/        Meson cross files, one per device plus a shared base
+cross/        Meson cross file and the pkg-config files the sysroot lacks
 docker/       toolchain image with Meson added
 pak/          launch.sh and notices, copied into the Pak
 ```
