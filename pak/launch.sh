@@ -26,4 +26,8 @@ exec 2>&1
 echo "=== Launching $PAK_NAME ($APP_BIN) at $(date) ==="
 echo "platform=${PLATFORM:-unknown} device=${DEVICE:-unknown}"
 
+if [ -f "${SYSTEM_PATH:-}/bin/governor.sh" ]; then
+    sh "$SYSTEM_PATH/bin/governor.sh" powersave || echo "governor.sh failed, continuing" >&2
+fi
+
 exec "./$APP_BIN" "$@"
