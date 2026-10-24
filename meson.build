@@ -1,5 +1,5 @@
 project('ra-explorer-pak', 'c',
-  version: '1.2.1',
+  version: '1.3.0',
   default_options: [
     'warning_level=2',
     'werror=true'
